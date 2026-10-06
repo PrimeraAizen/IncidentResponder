@@ -1,0 +1,134 @@
+{
+  "run_id": "20261006T130030Z-927491",
+  "incident_id": "inc-20261006-130030-cd27",
+  "plan": {
+    "incident_id": "inc-20261006-130030-cd27",
+    "alert": {
+      "alert_name": "HighLatency",
+      "service": "gateway",
+      "severity": "critical",
+      "started_at": "2026-10-06T12:52:06.166716Z",
+      "summary": "p95 latency of POST /api/orders > 1s",
+      "labels": {
+        "alertname": "HighLatency",
+        "service": "gateway"
+      }
+    },
+    "window_start": "2026-10-06T12:37:06.166716Z",
+    "window_end": "2026-10-06T13:00:30.198812Z",
+    "focus_services": [
+      "gateway",
+      "inventory",
+      "payment",
+      "order",
+      "redis",
+      "postgres",
+      "nats"
+    ],
+    "tasks": [
+      {
+        "task_id": "inc-20261006-130030-cd27-logs",
+        "agent": "log_analyst",
+        "objective": "Find warning/error log patterns, when they started and which services emit them, around the HighLatency alert on gateway.",
+        "window_start": "2026-10-06T12:37:06.166716Z",
+        "window_end": "2026-10-06T13:00:30.198812Z",
+        "focus_services": [
+          "gateway",
+          "inventory",
+          "payment",
+          "order",
+          "redis",
+          "postgres",
+          "nats"
+        ]
+      },
+      {
+        "task_id": "inc-20261006-130030-cd27-metrics",
+        "agent": "metrics_analyst",
+        "objective": "Find anomalies in latency, error rates, calls between services, DB pool and resource metrics for gateway, inventory, payment, order, redis, postgres, nats, compared with the baseline before the HighLatency alert.",
+        "window_start": "2026-10-06T12:37:06.166716Z",
+        "window_end": "2026-10-06T13:00:30.198812Z",
+        "focus_services": [
+          "gateway",
+          "inventory",
+          "payment",
+          "order",
+          "redis",
+          "postgres",
+          "nats"
+        ]
+      }
+    ]
+  },
+  "bundles": [
+    {
+      "agent": "log_analyst",
+      "task_id": "inc-20261006-130030-cd27-logs",
+      "status": "ok",
+      "evidence": [
+        {
+          "evidence_id": "logs-1",
+          "source": "logs",
+          "service": "gateway",
+          "signal": "4015 WARN 'slow upstream response' lines from gateway with upstream=payment, route=/charge, latency_ms ≈ 2062, first at 12:51:38Z",
+          "observed_at": "2026-10-06T12:51:38Z",
+          "strength": 0.95,
+          "raw_ref": "error_pattern_summary"
+        }
+      ],
+      "notes": "The gateway service started logging slow upstream responses from the payment service (/charge route) with latency around 2 seconds, starting at 12:51:38Z, which directly correlates with the HighLatency alert."
+    },
+    {
+      "agent": "metrics_analyst",
+      "task_id": "inc-20261006-130030-cd27-metrics",
+      "status": "ok",
+      "evidence": [
+        {
+          "evidence_id": "metrics-1",
+          "source": "metrics",
+          "service": "gateway",
+          "signal": "p95 latency of POST /api/orders increased to 2.86s (baseline 0.10s, z=100.0)",
+          "observed_at": "2026-10-06T12:51:36Z",
+          "strength": 1.0,
+          "raw_ref": "histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m])))"
+        },
+        {
+          "evidence_id": "metrics-2",
+          "source": "metrics",
+          "service": "order",
+          "signal": "p95 latency of /orders route remained normal at 0.0048s (z=0.0)",
+          "observed_at": null,
+          "strength": 0.1,
+          "raw_ref": "histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m])))"
+        },
+        {
+          "evidence_id": "metrics-3",
+          "source": "metrics",
+          "service": "payment",
+          "signal": "p95 latency of /charge route remained normal at 0.0975s (z=0.0)",
+          "observed_at": null,
+          "strength": 0.1,
+          "raw_ref": "histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m])))"
+        }
+      ],
+      "notes": "The gateway service shows a significant latency spike on POST /api/orders starting around 12:51:36 UTC, while downstream HTTP routes on order and payment services remain normal."
+    }
+  ],
+  "hypotheses": {
+    "hypotheses": [
+      {
+        "hypothesis_id": "h1",
+        "root_cause_service": "payment",
+        "fault_type": "latency",
+        "explanation": "The gateway is experiencing high latency because calls to the payment service (/charge) are taking over 2 seconds, as captured in the gateway logs, pointing to a latency issue in the payment service.",
+        "supporting_evidence": [
+          "logs-1",
+          "metrics-1"
+        ],
+        "suspect_commit": null,
+        "confidence": 0.8
+      }
+    ]
+  },
+  "failures": []
+}

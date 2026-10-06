@@ -58,6 +58,8 @@ Any OpenAI-compatible endpoint works. Set three variables in `.env`:
 
 Also set `LLM_API_KEY=...`. The key is read only from the environment or `.env`, which is gitignored; it never appears in code.
 
+**Free tiers:** set `LLM_MAX_RPM` to your requests-per-minute quota. For example, the Gemini free tier allows 5 per minute per model, so use `LLM_MAX_RPM=5`. Calls are then paced instead of failing with 429. One investigation needs about 10–15 LLM calls. `LLM_MODEL=… make investigate …` switches the model for a single run.
+
 For an offline dry run, set `LLM_PROVIDER=fake`. Every agent then returns a deterministic canned answer, marked `[fake]`. The tools still query the live stack. This mode is meant for tests and plumbing checks, not for real diagnosis.
 
 ## Demo (3 commands)
@@ -68,15 +70,19 @@ make investigate ALERT=alerts/s01.json    # the agents investigate the alert
 make reset                                # back to the healthy baseline
 ```
 
-`make investigate` prints a live trace of every agent action. These lines come from a `LLM_PROVIDER=fake` run:
+`make investigate` prints a live trace of every agent action. These lines are from a real run with `gemini-3.5-flash`:
 
 ```
-         planner → window 11:33:36–11:50:26 UTC, focus: gateway, inventory, payment, order, redis, postgres, nats
- metrics_analyst → targets_health() ✓ 5 ms
- metrics_analyst → zscore_anomaly(promql=histogram_quantile(0.95, sum by (le, service, target) (rate(upstream_request_durati…) ✓ 5 ms
-     log_analyst → error_pattern_summary() ✓ 138 ms
+         planner → window 12:37:06–13:00:30 UTC, focus: gateway, inventory, payment, order, redis, postgres, nats
+ metrics_analyst → targets_health() ✓ 3 ms
+     log_analyst → error_pattern_summary(start=…, end=…) ✓ 331 ms
+ metrics_analyst → zscore_anomaly(promql=histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_se…) ✓ 10 ms
+     log_analyst → loki_query(logql={service="payment"} | json, …) ✓ 24 ms
+ metrics_analyst → done: 3 evidence item(s), status=ok
+     log_analyst → waited 55 s (LLM_MAX_RPM=5)
+     log_analyst → done: 1 evidence item(s), status=ok
    diagnostician → dependency_graph() ✓ 0 ms
-   diagnostician → top hypothesis: payment / latency (confidence 0.70)
+   diagnostician → top hypothesis: payment / latency (confidence 0.80)
 ```
 
 It then prints two tables: the evidence from each specialist and the ranked root-cause hypotheses. Expected result for s01: **root cause `payment`, fault type `latency`**. The alert only says that the *gateway* is slow.
@@ -148,6 +154,9 @@ docs/            architecture, agents, messages, design decisions
 | Containers restart or are OOM-killed | Give Docker ≥ 6 GB of memory (Docker Desktop → Settings → Resources). |
 | `target-repo/ is missing` | Run `make target-init` once. |
 | `LLM_API_KEY is not set` | `cp .env.example .env` and fill in the LLM section, or use `LLM_PROVIDER=fake`. |
+| `429 … exceeded your current quota` | Set `LLM_MAX_RPM` to your plan's per-minute limit (Gemini free tier: 5). If the *daily* quota is used up, switch `LLM_MODEL`: quotas are per model. |
+| `503 … model is currently experiencing high demand` | The provider is overloaded (temporary). Retry later, or use another model, e.g. `LLM_MODEL=gemini-3.5-flash make investigate ALERT=…`. |
+| `400 … missing a thought_signature` | Fixed: the runtime sends Gemini's assistant messages back unchanged. If you see it, you are on an old checkout. |
 | `make scenario` says gateway is not healthy | `make reset` (or `make up`), then retry. |
 | Metrics evidence says "series did not exist in the baseline" | The stack was started very recently. `make scenario` waits for a warm-up, but give it a couple of minutes of normal traffic first. |
 | No logs in Grafana right after `make up` | Loki needs ~15–30 s. `make up` waits for Loki to be ready. |

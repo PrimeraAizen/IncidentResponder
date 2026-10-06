@@ -21,7 +21,7 @@ from typing import Any, Callable, TypeVar
 
 from rich.console import Console
 from rich.markup import escape
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import RetryCallState, Retrying, retry_if_exception, stop_after_attempt, wait_exponential
 
 T = TypeVar("T")
 
@@ -57,18 +57,24 @@ class CallLogger:
     # ----------------------------------------------------- retried + logged call
     def call(self, *, agent: str, call_type: str, name: str, fn: Callable[[], T],
              is_retryable: Callable[[BaseException], bool], attempts: int = 3,
-             usage: Callable[[T], tuple[int | None, int | None]] | None = None) -> T:
-        """Run fn() with exponential-backoff retries; log every attempt.
+             usage: Callable[[T], tuple[int | None, int | None]] | None = None,
+             wait: Callable[[RetryCallState], float] | None = None,
+             before_attempt: Callable[[], None] | None = None) -> T:
+        """Run fn() with retries; log every attempt.
 
         Each attempt produces one log line with status ok / retry / error.
         Non-retryable errors are raised immediately; after the last attempt the
         original exception is raised.
+        `wait`: delay between attempts (default: exponential backoff 0.5 s, 1 s, 2 s …).
+        `before_attempt`: runs before the latency timer starts (e.g. a rate limiter).
         """
         attempt_no = 0
 
         def one_attempt() -> T:
             nonlocal attempt_no
             attempt_no += 1
+            if before_attempt:
+                before_attempt()
             start = time.monotonic()
             try:
                 result = fn()
@@ -85,7 +91,7 @@ class CallLogger:
 
         retrying = Retrying(
             stop=stop_after_attempt(attempts),
-            wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
+            wait=wait or wait_exponential(multiplier=0.5, min=0.5, max=8),
             retry=retry_if_exception(is_retryable),
             reraise=True,
         )

@@ -108,6 +108,9 @@ Following the rule "choose the simplest reasonable option and note it":
     - Only Toxiproxy's control port is published, for the chaos CLI.
 14. **Python 3.12** is pinned in `agents/.python-version`. `uv` downloads it, so the defense machine runs exactly what was tested.
 15. **Fake provider outputs are marked `[fake]`,** so a canned answer is never mistaken for real reasoning (e.g. in screenshots).
+16. **The provider's assistant message is sent back unchanged** (`LLMResponse.raw_message`), instead of being rebuilt from our normalized fields. Gemini 3 attaches a `thought_signature` to each tool call and rejects the next request with 400 if it is missing. We found this on the first real run.
+17. **Client-side rate limit `LLM_MAX_RPM`** (sliding 60 s window, shared by the parallel agents). Free tiers allow very few requests per minute (Gemini: 5). Pacing the calls is better than collecting 429s. The time spent waiting is excluded from the logged LLM latency.
+18. **LLM retries honour the provider's hint.** A 429 that says "retry in 30.9s" (or sends a `Retry-After` header) waits that long, capped at `LLM_MAX_RETRY_WAIT_S`. Otherwise the waits are 2 s, then 4 s. `AgentFailure.attempts` reports the real number of attempts: a non-retryable 400 counts as 1, not 3.
 
 ## 6. Known limitations (Phase 1)
 

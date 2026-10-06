@@ -91,7 +91,7 @@ def run_agent(spec: AgentSpec, user_message: str, run: RunContext,
                 llm_calls += 1
     except LLMError as exc:
         run.calllog.trace(spec.name, f"LLM unavailable: {_short(exc)}", "red")
-        return AgentFailure(agent=spec.name, error=str(exc), attempts=limits.retry_attempts)
+        return AgentFailure(agent=spec.name, error=str(exc), attempts=exc.attempts)
     raise AssertionError("unreachable")
 
 

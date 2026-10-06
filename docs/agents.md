@@ -40,7 +40,15 @@ Specialists report **observations** (with `service` = the component that emitted
 
 Expected total ≈ 25–35 calls; the largest agent ≈ 15–25%. The CLI prints the per-agent shares after each run. `eval/load_report.py` (Phase 4) computes them from the JSONL call logs.
 
-Phase 1 prototype (fake LLM, s01): log_analyst 3 calls (30%), metrics_analyst 4 (40%), diagnostician 3 (30%). With only three agents in the prototype the shares are naturally high; with all seven agents each share drops well below 40%.
+Phase 1 prototype (s01, `gemini-3.5-flash`, `logs/sample/phase1_s01_gemini.jsonl`), 13 calls in total:
+
+| Agent | LLM calls | Tool calls | Share |
+|---|---|---|---|
+| log_analyst | 3 | 2 | 38% |
+| metrics_analyst | 3 | 2 | 38% |
+| diagnostician | 2 | 1 | 23% |
+
+With only three agents in the prototype the shares are naturally close to the limit. With all seven agents, each share drops well below 40%.
 
 ## Tools
 

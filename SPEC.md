@@ -479,7 +479,7 @@ Dates assume today = 6 Oct 2026. Update checkboxes as you go.
 - [x] `docs/architecture.md` (Mermaid + PNG), `docs/agents.md` (full table for all 7 agents), `docs/messages.md`, `docs/design-decisions.md` (why multi-agent)
 - [x] README v1
 - **Accept:** `make up && make scenario S=s01 && make investigate ALERT=…` prints evidence from 2 agents and a hypothesis naming payment.
-  - Verified on 6 Oct with `LLM_PROVIDER=fake` (live tools, canned LLM answers). **Still to do:** run once with a real LLM key, then refresh `docs/messages.md` and `logs/sample/` from that run.
+  - ✅ Verified on 6 Oct with a real LLM (`gemini-3.5-flash`): payment / latency, confidence 0.80, citing logs + metrics evidence. Run saved in `logs/sample/phase1_s01_gemini*.json*`.
   - Pulled forward: `loadgen` (needed for s01 traffic). Deviations are listed in `docs/design-decisions.md` §5.
 
 ### Phase 2 — Full backend & harness (12–18 Oct)

@@ -19,7 +19,10 @@ All agents exchange **structured messages**: Pydantic v2 models defined in [`age
 
 References to evidence ids that do not exist are dropped.
 
-> **Provenance of the examples.** `Alert`, `InvestigationPlan` and `Task` are verbatim from the Phase 1 s01 run (`logs/sample/phase1_s01_fake_llm_result.json`). That run used `LLM_PROVIDER=fake`. The tools queried the live stack, but the *content* of `EvidenceBundle` and `HypothesisSet` is the fake provider's canned output, marked `[fake]`. The structure is real. These examples will be replaced with a real-LLM run. `Verdict` and `IncidentReport` are illustrative until Phase 3.
+> **Provenance of the examples.**
+> - `EvidenceBundle` and `HypothesisSet` are verbatim from a real Phase 1 run on scenario s01 with `gemini-3.5-flash`: `logs/sample/phase1_s01_gemini_result.json`, call log `logs/sample/phase1_s01_gemini.jsonl`. The fault was injected at 12:51:36 UTC.
+> - `Alert`, `InvestigationPlan` and `Task` come from an earlier s01 run; the structure is identical.
+> - `Verdict` and `IncidentReport` are illustrative until Phase 3.
 
 ---
 
@@ -68,29 +71,54 @@ References to evidence ids that do not exist are dropped.
 
 ## EvidenceBundle and Evidence
 
+Log Analyst:
+
 ```json
 {
   "agent": "log_analyst",
-  "task_id": "inc-20261006-115026-333a-logs",
+  "task_id": "inc-20261006-130030-cd27-logs",
   "status": "ok",
   "evidence": [
     {
       "evidence_id": "logs-1",
       "source": "logs",
       "service": "gateway",
-      "signal": "[fake] repeated 'slow upstream response' warnings with upstream=payment",
-      "observed_at": null,
-      "strength": 0.8,
-      "raw_ref": "error_pattern_summary()"
+      "signal": "4015 WARN 'slow upstream response' lines from gateway with upstream=payment, route=/charge, latency_ms ≈ 2062, first at 12:51:38Z",
+      "observed_at": "2026-10-06T12:51:38Z",
+      "strength": 0.95,
+      "raw_ref": "error_pattern_summary"
     }
   ],
-  "notes": "[fake] canned output"
+  "notes": "The gateway service started logging slow upstream responses from the payment service (/charge route) with latency around 2 seconds, starting at 12:51:38Z, which directly correlates with the HighLatency alert."
+}
+```
+
+Metrics Analyst. Note that it also reports the signals that stayed **normal** (with low strength). "Payment's own `/charge` latency is unchanged" is what tells the Diagnostician that the delay is on the gateway→payment path.
+
+```json
+{
+  "agent": "metrics_analyst",
+  "task_id": "inc-20261006-130030-cd27-metrics",
+  "status": "ok",
+  "evidence": [
+    {"evidence_id": "metrics-1", "source": "metrics", "service": "gateway",
+     "signal": "p95 latency of POST /api/orders increased to 2.86s (baseline 0.10s, z=100.0)",
+     "observed_at": "2026-10-06T12:51:36Z", "strength": 1.0,
+     "raw_ref": "histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m])))"},
+    {"evidence_id": "metrics-2", "source": "metrics", "service": "order",
+     "signal": "p95 latency of /orders route remained normal at 0.0048s (z=0.0)",
+     "observed_at": null, "strength": 0.1, "raw_ref": "histogram_quantile(0.95, …)"},
+    {"evidence_id": "metrics-3", "source": "metrics", "service": "payment",
+     "signal": "p95 latency of /charge route remained normal at 0.0975s (z=0.0)",
+     "observed_at": null, "strength": 0.1, "raw_ref": "histogram_quantile(0.95, …)"}
+  ],
+  "notes": "The gateway service shows a significant latency spike on POST /api/orders starting around 12:51:36 UTC, while downstream HTTP routes on order and payment services remain normal."
 }
 ```
 
 `status` is `ok`, `partial` (a tool failed, so only part of the data was seen) or `failed` (the agent could not finish; `evidence` is empty and `notes` holds the error).
 
-For reference, this is what the real `error_pattern_summary` tool returned on the live stack during s01. It is the data a real LLM turns into the evidence above:
+For reference, this is raw `error_pattern_summary` tool output from an earlier s01 run. It is the kind of data the Log Analyst turns into the evidence above:
 
 ```json
 {"service": "gateway", "pattern": "WARN slow upstream response upstream=payment route=/charge status=200",
@@ -118,10 +146,10 @@ On the same query by route, payment's own `POST /charge` was unchanged (ratio 1.
       "hypothesis_id": "h1",
       "root_cause_service": "payment",
       "fault_type": "latency",
-      "explanation": "[fake] gateway waits on slow payment calls",
+      "explanation": "The gateway is experiencing high latency because calls to the payment service (/charge) are taking over 2 seconds, as captured in the gateway logs, pointing to a latency issue in the payment service.",
       "supporting_evidence": ["logs-1", "metrics-1"],
       "suspect_commit": null,
-      "confidence": 0.7
+      "confidence": 0.8
     }
   ]
 }
@@ -176,7 +204,7 @@ From the degradation unit test (`test_failed_specialist_degrades_gracefully`), w
 One line per LLM call and per tool call in `logs/run_<run_id>.jsonl`:
 
 ```json
-{"ts": "2026-10-06T11:50:26.646+00:00", "run_id": "20261006T115026Z-714e3b", "incident_id": "inc-20261006-115026-333a",
- "agent": "metrics_analyst", "call_type": "tool", "name": "targets_health", "latency_ms": 5, "status": "ok",
- "attempt": 1, "tokens_in": null, "tokens_out": null, "error": null}
+{"ts": "2026-10-06T13:00:32.055+00:00", "run_id": "20261006T130030Z-927491", "incident_id": "inc-20261006-130030-cd27",
+ "agent": "metrics_analyst", "call_type": "llm", "name": "gemini-3.5-flash", "latency_ms": 1853, "status": "ok",
+ "attempt": 1, "tokens_in": 2014, "tokens_out": 10, "error": null}
 ```
