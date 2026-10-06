@@ -1,0 +1,20 @@
+# Alert rules for the live demo (Prometheus UI / Grafana).
+# The eval harness builds Alert JSON itself, using the same alert names.
+groups:
+  - name: shop
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum by (service) (rate(http_requests_total{status=~"5.."}[1m]))
+            / sum by (service) (rate(http_requests_total[1m])) > 0.05
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.service }}: 5xx ratio {{ $value | humanizePercentage }}"
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m]))) > 1
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.service }} {{ $labels.route }}: p95 latency {{ $value | humanizeDuration }}"

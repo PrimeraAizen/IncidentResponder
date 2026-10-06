@@ -1,0 +1,39 @@
+# Static dependency graph of the shop backend - the kind of architecture
+# knowledge an on-call engineer has from the runbook. Used by the
+# `dependency_graph` tool (Diagnostician) and by the plan builder.
+#
+# depends_on = components this one calls. A fault in a dependency usually
+# shows up as a symptom in the services that call it.
+components:
+  gateway:
+    kind: service
+    description: Public API. POST /api/orders calls inventory /reserve, then payment /charge (with retries), then order /orders.
+    depends_on: [inventory, payment, order]
+  order:
+    kind: service
+    description: Stores orders in postgres; publishes orders.created events to nats.
+    depends_on: [postgres, nats]
+  payment:
+    kind: service
+    description: Charges customers through an external payment provider.
+    depends_on: []
+  inventory:
+    kind: service
+    description: Product catalogue and stock reservation; redis read cache with postgres fallback.
+    depends_on: [redis, postgres]
+  notification:
+    kind: service
+    description: Consumes orders.created events from nats and sends notifications.
+    depends_on: [nats]
+  postgres:
+    kind: database
+    description: PostgreSQL 16, shared by order and inventory.
+    depends_on: []
+  redis:
+    kind: cache
+    description: Read cache for inventory.
+    depends_on: []
+  nats:
+    kind: message_broker
+    description: Event bus (orders.created).
+    depends_on: []

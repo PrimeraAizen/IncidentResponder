@@ -1,0 +1,116 @@
+{
+  "run_id": "20261006T115026Z-714e3b",
+  "incident_id": "inc-20261006-115026-333a",
+  "plan": {
+    "incident_id": "inc-20261006-115026-333a",
+    "alert": {
+      "alert_name": "HighLatency",
+      "service": "gateway",
+      "severity": "critical",
+      "started_at": "2026-10-06T11:48:36.404182Z",
+      "summary": "p95 latency of POST /api/orders > 1s",
+      "labels": {
+        "alertname": "HighLatency",
+        "service": "gateway"
+      }
+    },
+    "window_start": "2026-10-06T11:33:36.404182Z",
+    "window_end": "2026-10-06T11:50:26.633991Z",
+    "focus_services": [
+      "gateway",
+      "inventory",
+      "payment",
+      "order",
+      "redis",
+      "postgres",
+      "nats"
+    ],
+    "tasks": [
+      {
+        "task_id": "inc-20261006-115026-333a-logs",
+        "agent": "log_analyst",
+        "objective": "Find warning/error log patterns, when they started and which services emit them, around the HighLatency alert on gateway.",
+        "window_start": "2026-10-06T11:33:36.404182Z",
+        "window_end": "2026-10-06T11:50:26.633991Z",
+        "focus_services": [
+          "gateway",
+          "inventory",
+          "payment",
+          "order",
+          "redis",
+          "postgres",
+          "nats"
+        ]
+      },
+      {
+        "task_id": "inc-20261006-115026-333a-metrics",
+        "agent": "metrics_analyst",
+        "objective": "Find anomalies in latency, error rates, calls between services, DB pool and resource metrics for gateway, inventory, payment, order, redis, postgres, nats, compared with the baseline before the HighLatency alert.",
+        "window_start": "2026-10-06T11:33:36.404182Z",
+        "window_end": "2026-10-06T11:50:26.633991Z",
+        "focus_services": [
+          "gateway",
+          "inventory",
+          "payment",
+          "order",
+          "redis",
+          "postgres",
+          "nats"
+        ]
+      }
+    ]
+  },
+  "bundles": [
+    {
+      "agent": "log_analyst",
+      "task_id": "inc-20261006-115026-333a-logs",
+      "status": "ok",
+      "evidence": [
+        {
+          "evidence_id": "logs-1",
+          "source": "logs",
+          "service": "gateway",
+          "signal": "[fake] repeated 'slow upstream response' warnings with upstream=payment",
+          "observed_at": null,
+          "strength": 0.8,
+          "raw_ref": "error_pattern_summary()"
+        }
+      ],
+      "notes": "[fake] canned output"
+    },
+    {
+      "agent": "metrics_analyst",
+      "task_id": "inc-20261006-115026-333a-metrics",
+      "status": "ok",
+      "evidence": [
+        {
+          "evidence_id": "metrics-1",
+          "source": "metrics",
+          "service": "gateway",
+          "signal": "[fake] p95 latency of gateway→payment calls far above baseline",
+          "observed_at": null,
+          "strength": 0.9,
+          "raw_ref": "zscore_anomaly(upstream p95)"
+        }
+      ],
+      "notes": "[fake] canned output"
+    }
+  ],
+  "hypotheses": {
+    "hypotheses": [
+      {
+        "hypothesis_id": "h1",
+        "root_cause_service": "payment",
+        "fault_type": "latency",
+        "explanation": "[fake] gateway waits on slow payment calls",
+        "supporting_evidence": [
+          "logs-1",
+          "metrics-1"
+        ],
+        "suspect_commit": null,
+        "confidence": 0.7
+      }
+    ]
+  },
+  "failures": []
+}

@@ -1,0 +1,5 @@
+# Payment service configuration (checked into the target repo).
+listen_addr: ":8082"
+base_latency_ms: 50   # simulated provider round-trip
+jitter_ms: 20
+failure_rate: 0.0     # fraction of charges the provider rejects

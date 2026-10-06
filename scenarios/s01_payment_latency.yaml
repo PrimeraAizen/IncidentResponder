@@ -1,0 +1,17 @@
+id: s01_payment_latency
+description: Payment provider becomes slow (+2s per request).
+setup:                      # executed by the chaos CLI
+  - toxic: {proxy: gateway_payment, type: latency, latency_ms: 2000}
+load: {rps: 15, duration_s: 180}
+warmup_s: 120               # healthy traffic before fault (gives the agents a baseline)
+observe_s: 90               # fault active before alert fires
+alert:                      # what the system receives - the SYMPTOM, not the cause
+  alert_name: HighLatency
+  service: gateway
+  severity: critical
+  summary: "p95 latency of POST /api/orders > 1s"
+expected:
+  root_cause_service: payment
+  fault_type: latency
+  accepted_services: []     # alternative services also counted as correct
+  must_not_blame: [gateway]

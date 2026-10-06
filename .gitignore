@@ -1,0 +1,34 @@
+# Secrets — never commit real keys (see .env.example)
+.env
+
+# Separate git repo created by `make target-init` (compose builds services from here)
+target-repo/
+
+# Runtime data: SQLite store, deploy event log
+data/
+
+# Call logs — only logs/sample/ is committed (graded evidence of load distribution)
+logs/*
+!logs/sample/
+
+# Generated alerts from `make scenario`
+alerts/*.json
+
+# Eval raw results (summaries go to docs/results.md)
+eval/results/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Go
+services/**/bin/
+loadgen/loadgen
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

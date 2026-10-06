@@ -1,0 +1,10 @@
+# Gateway configuration (checked into the target repo; changes here are real git diffs).
+listen_addr: ":8080"
+# Downstream services are reached through Toxiproxy (fault injection point).
+# Empty inventory_url = inventory not deployed yet (reserve step skipped).
+inventory_url: ""
+payment_url: "http://toxiproxy:18082"
+order_url: "http://toxiproxy:18081"
+payment_retries: 3          # retries after the first attempt
+upstream_timeout_ms: 3000   # per call
+default_unit_price: 9.99    # used only while inventory is not configured

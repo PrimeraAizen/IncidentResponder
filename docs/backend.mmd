@@ -1,0 +1,28 @@
+flowchart LR
+    LG[loadgen<br/>steady traffic] --> GW[gateway :8080]
+    subgraph TP[Toxiproxy - fault injection point]
+        direction TB
+        P1([gateway_inventory])
+        P2([gateway_payment])
+        P3([gateway_order])
+        P4([order_postgres])
+        P5([inventory_postgres / inventory_redis])
+        P6([order_nats])
+    end
+    GW --> P1 --> INV[inventory :8083]
+    GW --> P2 --> PAY[payment :8082]
+    GW --> P3 --> ORD[order :8081]
+    ORD --> P4 --> PG[(postgres)]
+    INV --> P5 --> PG
+    P5 --> RD[(redis)]
+    ORD --> P6 --> NATS[(nats)]
+    NATS --> NOTIF[notification :8084]
+
+    subgraph OBS[Observability - what the agents can read]
+        PROM[(Prometheus)]
+        LOKI[(Loki)]
+        GRAF[Grafana]
+    end
+    GW & ORD & PAY & INV & NOTIF -. "/metrics every 5 s" .-> PROM
+    GW & ORD & PAY & INV & NOTIF & PG -. "stdout JSON logs via Alloy" .-> LOKI
+    PROM & LOKI --> GRAF

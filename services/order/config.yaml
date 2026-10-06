@@ -1,0 +1,10 @@
+# Order service configuration (checked into the target repo).
+listen_addr: ":8081"
+db:
+  host: toxiproxy           # order→postgres goes through Toxiproxy
+  port: 15432
+  name: shop
+  user: shop                # password comes from env POSTGRES_PASSWORD
+  max_conns: 10
+  query_timeout_ms: 2000
+max_orders_per_minute: 50

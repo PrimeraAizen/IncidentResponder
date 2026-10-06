@@ -1,0 +1,22 @@
+flowchart LR
+    A[Alert JSON] --> O[Orchestrator<br/>plan only]
+    O --> L[Log Analyst]
+    O --> M[Metrics Analyst]
+    O --> C[Change Investigator]
+    L -- EvidenceBundle --> D[Diagnostician]
+    M -- EvidenceBundle --> D
+    C -- EvidenceBundle --> D
+    D -- HypothesisSet --> V[Verifier]
+    V -- "rejected, loops < 2" --> D
+    V -- "confirmed / inconclusive / limit" --> R[Reporter]
+    R --> OUT[Incident report md + json]
+
+    L -.-> LOKI[(Loki API)]
+    M -.-> PROM[(Prometheus API)]
+    C -.-> GIT[(git target-repo)]
+    C -.-> DEP[(deploy_events.jsonl)]
+    C -.-> DOCK[(Docker API)]
+    V -.-> LOKI
+    V -.-> PROM
+    D -.-> TOPO[(dependency graph yaml)]
+    S[(State store SQLite<br/>+ LangGraph checkpointer)] --- O & D & V & R

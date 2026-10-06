@@ -1,0 +1,44 @@
+// Ships container stdout to Loki with labels `service` and `container`.
+//
+// ANTI-LEAKAGE: only the system under investigation is shipped. Toxiproxy and
+// the load generator are harness components; their logs would reveal the
+// injected fault ("added toxic latency to gateway_payment"), so they are dropped.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=incident-responder"]
+  }
+}
+
+discovery.relabel "system" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "gateway|order|payment|inventory|notification|postgres|redis|nats"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "system" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.system.output
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -1,0 +1,21 @@
+# Scrapes every service every 5 s. Each target gets a `service` label so that
+# Go runtime metrics (go_goroutines, ...) can be filtered by service too.
+# honor_labels keeps the `service` label the services set on their own metrics.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - rules.yml
+
+scrape_configs:
+  - job_name: gateway
+    honor_labels: true
+    static_configs: [{targets: ["gateway:8080"], labels: {service: gateway}}]
+  - job_name: order
+    honor_labels: true
+    static_configs: [{targets: ["order:8081"], labels: {service: order}}]
+  - job_name: payment
+    honor_labels: true
+    static_configs: [{targets: ["payment:8082"], labels: {service: payment}}]
+  # Phase 2: inventory (8083), notification (8084)
