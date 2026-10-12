@@ -42,3 +42,19 @@ func TestUpstreamErrorTimeout(t *testing.T) {
 		t.Error("HTTP 500 is not a timeout")
 	}
 }
+
+// Chaos flags start and stop their fault; stopping releases it.
+func TestChaosFlagsToggle(t *testing.T) {
+	c := newChaos()
+	c.set("leak_memory", true)
+	if !c.state()["leak_memory"] {
+		t.Fatal("leak_memory should be on")
+	}
+	c.set("leak_memory", false)
+	if c.state()["leak_memory"] {
+		t.Fatal("leak_memory should be off")
+	}
+	if len(c.state()) != 3 {
+		t.Fatalf("expected 3 flags, got %v", c.state())
+	}
+}

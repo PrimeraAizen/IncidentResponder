@@ -112,9 +112,36 @@ Following the rule "choose the simplest reasonable option and note it":
 17. **Client-side rate limit `LLM_MAX_RPM`** (sliding 60 s window, shared by the parallel agents). Free tiers allow very few requests per minute (Gemini: 5). Pacing the calls is better than collecting 429s. The time spent waiting is excluded from the logged LLM latency.
 18. **LLM retries honour the provider's hint.** A 429 that says "retry in 30.9s" (or sends a `Retry-After` header) waits that long, capped at `LLM_MAX_RETRY_WAIT_S`. Otherwise the waits are 2 s, then 4 s. `AgentFailure.attempts` reports the real number of attempts: a non-retryable 400 counts as 1, not 3.
 
-## 6. Known limitations (Phase 1)
+## 6. Choices made in Phase 2 (full backend & harness)
 
-- The prototype has no Change Investigator, Verifier or Reporter yet. A bad deploy cannot be identified until Phase 3.
-- `make scenario` relies on the always-on load generator. The scenario's `load:` block (scenario-specific RPS) is applied by the eval harness from Phase 3 on.
+19. **A baseline network latency to Postgres (20 ± 5 ms per round trip) is part of the normal environment.** It is a Toxiproxy toxic named `baseline_latency`, applied by `make up` and restored by every reset; see `infra/toxiproxy/baseline/README.md`.
+    - **Why:** locally a round trip takes ~0.3 ms, so even a 2-connection pool never runs out and s06 (pool exhaustion) could not happen.
+    - **Effect:** with 20 ms per round trip an order holds a connection for ~80 ms (BEGIN, fraud check, INSERT, COMMIT). The default pool of 10 copes; a pool of 2 at 30 rps does not. This is how pool exhaustion happens in production too.
+20. **Orders are created in one transaction** (fraud check + insert). This is correct for consistency, and it is what makes connection hold time realistic.
+21. **Noise deploys happen at the start of `make scenario`, not in `make reset`.** The spec asks for 1–2 harmless deploys "a few minutes before each scenario", in an *unrelated* service, and only the scenario knows which services are related.
+    - The default is two noise deploys from `notification → payment → inventory`, skipping the ground-truth services.
+    - A scenario can override the choice (s08 does: a payment restart would produce the same `upstream=payment` errors as its fault).
+    - `make reset` returns to a clean baseline with an empty deploy log.
+22. **`/admin/chaos` is served on a separate internal port (9000)** that is not published to the host. The harness reaches it with `docker compose exec`. Toggling a fault is deliberately **not logged**: the agents must find a leak from its effects (heap, goroutines, restarts), not from a log line saying "leak enabled".
+23. **Faults are realistic, not scripted:**
+    - **leak_memory:** keeps 2 MiB/s reachable. Notification has a 128 MiB memory limit, so the container is really OOM-killed and restarted by Docker.
+    - **leak_goroutines:** starts 200 goroutines/s that never exit and periodically do a little work, so CPU use and latency grow with their number.
+    - **cpu_burn:** keeps every core busy.
+24. **Panics are recovered and logged as JSON** (`msg="panic recovered"`, `error`, `location`) with a 500 response, like most web frameworks do. Without this, s04's nil-pointer bug would only appear as dropped connections with no log line.
+25. **Inventory's cache fallback is genuinely slower.** The Postgres path also counts each product's orders of the last 7 days (an aggregate over the orders table), and go-redis keeps its default retries with backoff before giving up. Losing Redis (s03) therefore shows up as latency, as it would in production.
+26. **NATS publishes fail fast while disconnected** (`ReconnectBufSize(-1)`), instead of silently buffering in memory. s07 then produces `event publish failed upstream=nats` errors and `events_published_total{status="error"}`, while orders still succeed.
+27. **Alloy refreshes container discovery every 5 s** (default 60 s). A deploy recreates the container with a new id, and the default would lose the first minute of the new version's logs, which is exactly the evidence of a bad deploy.
+28. **`zscore_anomaly`'s default baseline is the 2 minutes ending 60 s before the alert** (Phase 1 used 5 min). When scenarios run back-to-back, a longer baseline would include the previous scenario's fault.
+29. **Every scenario has a harness-only `symptom` check** (PromQL + threshold). It proves the injected fault produced the intended symptom, so a failed evaluation run can be told apart from a broken scenario.
+30. **`load.rps` is the total request rate during a scenario.** The always-on load generator provides `LOADGEN_RPS` (10). The harness starts a second one for the difference, from the warm-up until `duration_s` after injection.
+31. **Expected deploy commits are resolved at run time** (`suspect_commit: from_deploy`): the sha is created by the deploy step, so it cannot be written in the YAML.
+32. **s08 adds `must_not_blame: [payment]`.** The fault produces "payment unreachable" errors at the gateway, but payment itself is healthy. Blaming it is precisely the mistake this scenario tests.
+33. **Deploys do not wait for the new version to become healthy.** A broken release may never become healthy (s06: `/healthz` pings Postgres through the exhausted pool), and a pipeline without health gating would not wait either. Resets do wait for health.
+34. **s06 runs under a lunch-time order rush** (`load: {rps: 40, mix: "create=70,get=30"}`). With the normal mix (30% orders), even 2 connections are only ~40% busy. Pool exhaustion needs demand above capacity, which is also what happens in production.
+
+## 7. Known limitations
+
+- Until Phase 3 there is no Change Investigator, Verifier or Reporter. Deploys are recorded (git + deploy log), but no agent reads them yet, so bad deploys and misconfigurations (s04, s06, s08) cannot be fully diagnosed.
+- The plan window (15 min before the alert) can still contain the tail of a previous scenario when scenarios run back-to-back. The specialists are told to mark patterns that started long before the alert. Phase 3/4 (the Orchestrator's window, eval cooldowns) will revisit this.
 - Loki's `label/values` endpoint can lag a minute behind fresh streams. The Log Analyst uses `error_pattern_summary` / `loki_query` first, and those are not affected.
-- The topology lists all eight components, including those that arrive in Phase 2.
+- A scenario run takes ~4.5 min (reset + noise deploys + 120 s warm-up + 90 s observation). That makes the spec's "< 90 min for 12 × 3 runs" target unreachable without shortening the warm-up or observation; revisited in Phase 4.

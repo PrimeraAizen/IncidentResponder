@@ -28,6 +28,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["responder"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

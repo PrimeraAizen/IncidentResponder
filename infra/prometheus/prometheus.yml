@@ -18,4 +18,9 @@ scrape_configs:
   - job_name: payment
     honor_labels: true
     static_configs: [{targets: ["payment:8082"], labels: {service: payment}}]
-  # Phase 2: inventory (8083), notification (8084)
+  - job_name: inventory
+    honor_labels: true
+    static_configs: [{targets: ["inventory:8083"], labels: {service: inventory}}]
+  - job_name: notification
+    honor_labels: true
+    static_configs: [{targets: ["notification:8084"], labels: {service: notification}}]

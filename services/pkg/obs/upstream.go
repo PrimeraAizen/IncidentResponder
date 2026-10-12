@@ -46,13 +46,10 @@ func (e *UpstreamError) Timeout() bool {
 	return errors.Is(e.Err, context.DeadlineExceeded) || errors.Is(e.Err, os.ErrDeadlineExceeded)
 }
 
-// NewUpstream creates a client; an empty baseURL means "not configured".
+// NewUpstream creates a client for one dependency.
 func (o *Obs) NewUpstream(target, baseURL string, timeout time.Duration) *Upstream {
 	return &Upstream{obs: o, Target: target, BaseURL: baseURL, client: &http.Client{Timeout: timeout}}
 }
-
-// Configured is false when the service has no URL for this dependency.
-func (u *Upstream) Configured() bool { return u.BaseURL != "" }
 
 // Do sends a JSON request and decodes a 2xx JSON response into out (if non-nil).
 func (u *Upstream) Do(ctx context.Context, method, path string, body, out any) error {

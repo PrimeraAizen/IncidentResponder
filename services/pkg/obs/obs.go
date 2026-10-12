@@ -5,10 +5,13 @@
 // same way, e.g. `{service="order"} | json | level="ERROR"` in Loki or
 // `http_requests_total{service="order"}` in Prometheus.
 //
-// This file: logger, request middleware, /healthz, /metrics, build_info,
-// trace-id propagation, JSON helpers, config loading and graceful serving.
+// This file: logger, request middleware (with panic recovery), /healthz,
+// /metrics, build_info, trace-id propagation, JSON helpers, config loading
+// and graceful serving.
 // upstream.go: instrumented HTTP client for service-to-service calls.
-// db.go: instrumented Postgres pool.
+// db.go: instrumented Postgres pool and transactions.
+// events.go: NATS connection with logging.
+// chaos.go: internal fault hooks for the test harness (/admin/chaos).
 package obs
 
 import (
@@ -17,10 +20,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,6 +44,7 @@ type Obs struct {
 	Service string
 	Log     *slog.Logger
 	checks  map[string]func(context.Context) error
+	chaos   *chaos
 }
 
 // New creates the logger and sets the build_info gauge.
@@ -52,7 +59,7 @@ func New(service, version, commit string) *Obs {
 		},
 	})
 	BuildInfo.WithLabelValues(service, version, commit).Set(1)
-	o := &Obs{Service: service, Log: slog.New(h).With("service", service), checks: map[string]func(context.Context) error{}}
+	o := &Obs{Service: service, Log: slog.New(h).With("service", service), checks: map[string]func(context.Context) error{}, chaos: newChaos()}
 	o.Log.Info("starting", "version", version, "commit", commit)
 	return o
 }
@@ -98,13 +105,9 @@ func (o *Obs) Middleware(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		rec.Header().Set(TraceHeader, traceID)
 
-		next.ServeHTTP(rec, r)
+		o.serveRecovering(next, rec, r)
 
-		// ServeMux sets r.Pattern (e.g. "POST /charge") while routing.
-		route := "unmatched"
-		if _, path, ok := strings.Cut(r.Pattern, " "); ok {
-			route = path
-		}
+		route := routeOf(r)
 		if route == "/metrics" || route == "/healthz" {
 			return // scraped every few seconds; not business traffic
 		}
@@ -123,13 +126,56 @@ func (o *Obs) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// serveRecovering runs the handler and turns a panic into a logged 500 (like most
+// web frameworks do) instead of a dropped connection.
+func (o *Obs) serveRecovering(next http.Handler, rec *statusRecorder, r *http.Request) {
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+		o.Log.ErrorContext(r.Context(), "panic recovered", "route", routeOf(r), "method", r.Method,
+			"error", fmt.Sprint(p), "location", panicLocation(), "trace_id", TraceID(r.Context()))
+		if !rec.wroteHeader {
+			WriteJSON(rec, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		}
+	}()
+	next.ServeHTTP(rec, r)
+}
+
+// panicLocation returns the first application frame of the panicking goroutine,
+// e.g. "main.(*server).createOrder (order/main.go:97)".
+func panicLocation() string {
+	pcs := make([]uintptr, 32)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasPrefix(f.Function, "main.") {
+			return fmt.Sprintf("%s (%s:%d)", f.Function, filepath.Join(filepath.Base(filepath.Dir(f.File)), filepath.Base(f.File)), f.Line)
+		}
+		if !more {
+			return "unknown"
+		}
+	}
+}
+
+// routeOf returns the matched route pattern without the method ("/orders/{id}").
+// ServeMux sets r.Pattern (e.g. "GET /orders/{id}") while routing.
+func routeOf(r *http.Request) string {
+	if _, path, ok := strings.Cut(r.Pattern, " "); ok {
+		return path
+	}
+	return "unmatched"
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
-	s.status = code
+	s.status, s.wroteHeader = code, true
 	s.ResponseWriter.WriteHeader(code)
 }
 
@@ -175,7 +221,9 @@ func LoadConfig(out any) error {
 }
 
 // Serve runs the HTTP server with the middleware and shuts down cleanly on SIGTERM.
+// It also starts the internal admin listener (see chaos.go).
 func (o *Obs) Serve(addr string, mux *http.ServeMux) {
+	o.serveAdmin()
 	srv := &http.Server{Addr: addr, Handler: o.Middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		o.Log.Info("listening", "addr", addr)

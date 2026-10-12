@@ -1,0 +1,16 @@
+Subject: order: lower DB pool size to reduce connections on shared postgres
+Author: Daniyar Bekov <daniyar.bekov@shop.example>
+
+diff --git a/order/config.yaml b/order/config.yaml
+index 7483a87..0627f9c 100644
+--- a/order/config.yaml
++++ b/order/config.yaml
+@@ -5,7 +5,7 @@ db:
+   port: 15432
+   name: shop
+   user: shop                # password comes from env POSTGRES_PASSWORD
+-  max_conns: 10
++  max_conns: 2
+   query_timeout_ms: 2000    # whole DB work of one request, including waiting for a connection
+ nats_url: "nats://toxiproxy:14222"   # order→nats goes through Toxiproxy
+ subject: orders.created

@@ -15,3 +15,7 @@ expected:
   fault_type: latency
   accepted_services: []     # alternative services also counted as correct
   must_not_blame: [gateway]
+symptom:                    # harness-only: proves the fault produced the symptom
+  - description: gateway POST /api/orders p95 latency (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="gateway",route="/api/orders"}[1m])))
+    above: 1

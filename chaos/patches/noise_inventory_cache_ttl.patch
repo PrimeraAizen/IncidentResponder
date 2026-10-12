@@ -1,0 +1,13 @@
+Subject: inventory: cache the product list for 15s instead of 10s
+Author: Arman Seitkali <arman.seitkali@shop.example>
+
+diff --git a/inventory/config.yaml b/inventory/config.yaml
+index a6c7676..a3b4555 100644
+--- a/inventory/config.yaml
++++ b/inventory/config.yaml
+@@ -9,4 +9,4 @@ db:
+   query_timeout_ms: 2000
+ redis:
+   addr: "toxiproxy:16379"   # inventory→redis goes through Toxiproxy
+-  ttl_s: 10                 # product list cache lifetime
++  ttl_s: 15                 # product list cache lifetime

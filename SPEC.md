@@ -483,11 +483,12 @@ Dates assume today = 6 Oct 2026. Update checkboxes as you go.
   - Pulled forward: `loadgen` (needed for s01 traffic). Deviations are listed in `docs/design-decisions.md` §5.
 
 ### Phase 2 — Full backend & harness (12–18 Oct)
-- [ ] inventory, notification, Redis, NATS; all Toxiproxy proxies; seed data
+- [x] inventory, notification, Redis, NATS; all Toxiproxy proxies; seed data
 - [x] loadgen (done in Phase 1)
-- [ ] `/admin/chaos` flags; `deploy_sim` + patches; harmless noise deploys in `reset`
-- [ ] Scenarios s01–s08 YAML + reproducible manually (verify symptoms visible in Grafana)
+- [x] `/admin/chaos` flags; `deploy_sim` + patches; harmless noise deploys in `reset` (done at the start of `make scenario`, see `docs/design-decisions.md` §6)
+- [x] Scenarios s01–s08 YAML + reproducible manually (verify symptoms visible in Grafana) — each scenario has a PromQL symptom check; results in `docs/results.md`
 - **Accept:** each of s01–s08 produces the intended symptom within `observe_s`, and `make reset` returns to healthy.
+  - ✅ Verified on 12 Oct: all 8 symptom checks pass (values in `docs/results.md`); after `make reset` all containers are healthy, target-repo is at `baseline`, the deploy log is empty and only the baseline toxics remain.
 
 ### Phase 3 — All agents end-to-end (19–25 Oct)
 - [ ] Orchestrator, Change Investigator, Verifier (with loop), Reporter

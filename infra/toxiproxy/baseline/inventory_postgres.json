@@ -1,0 +1,2 @@
+{"name": "baseline_latency", "type": "latency", "stream": "downstream", "toxicity": 1.0,
+ "attributes": {"latency": 20, "jitter": 5}}

@@ -144,7 +144,7 @@ def prom_query_range(args: PromRangeArgs, ctx: ToolContext) -> dict:
 
 class ZScoreArgs(BaseModel):
     promql: str = Field(description="PromQL expression; every returned series is scored")
-    baseline_start: UTCDateTime | None = Field(None, description="Default: start of the investigation window")
+    baseline_start: UTCDateTime | None = Field(None, description="Default: 3 minutes before the alert")
     baseline_end: UTCDateTime | None = Field(None, description="Default: 60 s before the alert")
     incident_start: UTCDateTime | None = Field(None, description="Default: 30 s before the alert")
     incident_end: UTCDateTime | None = Field(None, description="Default: end of the investigation window")

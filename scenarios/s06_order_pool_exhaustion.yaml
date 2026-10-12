@@ -1,0 +1,25 @@
+id: s06_order_pool_exhaustion
+description: During a lunch-time order rush, a config deploy shrinks the order DB pool to 2 connections; requests queue and time out.
+setup:
+  - deploy: {service: order, patch: s06_order_pool_size.patch}
+load: {rps: 40, mix: "create=70,get=30"}   # order rush: ~24 orders/s need ~2.4 pooled connections
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighLatency
+  service: gateway
+  severity: critical
+  summary: "p95 latency of POST /api/orders > 1s, some requests time out"
+expected:
+  root_cause_service: order
+  fault_type: resource_exhaustion
+  suspect_commit: from_deploy
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: gateway POST /api/orders p95 latency (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="gateway",route="/api/orders"}[1m])))
+    above: 1
+  - description: order DB pool wait p95 (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(db_pool_acquire_duration_seconds_bucket{service="order"}[1m])))
+    above: 0.2

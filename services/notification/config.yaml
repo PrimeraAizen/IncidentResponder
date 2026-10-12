@@ -1,0 +1,5 @@
+# Notification service configuration (checked into the target repo).
+listen_addr: ":8084"
+nats_url: "nats://nats:4222"
+subject: orders.created
+template: "Thank you! Your order #{order_id} ({amount} USD) is confirmed."

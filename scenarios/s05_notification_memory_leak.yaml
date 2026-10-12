@@ -1,0 +1,23 @@
+id: s05_notification_memory_leak
+description: Notification leaks memory (2 MiB/s) until the container is OOM-killed and restarted.
+setup:
+  - chaos: {service: notification, leak_memory: true}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighMemoryUsage
+  service: notification
+  severity: warning
+  summary: "notification memory grows quickly; container restarted"
+expected:
+  root_cause_service: notification
+  fault_type: memory_leak
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: notification peak heap in the last 3 min (bytes)
+    promql: max_over_time(go_memstats_heap_alloc_bytes{service="notification"}[3m])
+    above: 50000000
+  - description: notification restarts in the last 3 min
+    promql: changes(process_start_time_seconds{service="notification"}[3m])
+    above: 0

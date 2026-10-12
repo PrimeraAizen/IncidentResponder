@@ -21,7 +21,7 @@ git -C "$TARGET" init -q -b main
 git -C "$TARGET" add -A
 # A fixed team identity: commits in this repo play the role of a real team's history.
 git -C "$TARGET" -c user.name="Shop Platform Team" -c user.email="platform@shop.example" \
-  -c commit.gpgsign=false commit -q -m "Import shop services (gateway, order, payment)"
+  -c commit.gpgsign=false commit -q -m "Import shop services (gateway, order, payment, inventory, notification)"
 git -C "$TARGET" tag baseline
 
 echo "target-repo created at $(git -C "$TARGET" rev-parse --short HEAD), tagged 'baseline'"

@@ -8,6 +8,7 @@ package obs
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,22 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// DBConfig is the `db:` block of a service's config.yaml.
+// The password is not in the file: it comes from env POSTGRES_PASSWORD.
+type DBConfig struct {
+	Host           string `yaml:"host"`
+	Port           int    `yaml:"port"`
+	Name           string `yaml:"name"`
+	User           string `yaml:"user"`
+	MaxConns       int32  `yaml:"max_conns"`
+	QueryTimeoutMS int    `yaml:"query_timeout_ms"`
+}
+
+// QueryTimeout bounds one request's database work (pool wait included).
+func (c DBConfig) QueryTimeout() time.Duration {
+	return time.Duration(c.QueryTimeoutMS) * time.Millisecond
+}
+
 // DB wraps a pgx pool with metrics.
 type DB struct {
 	obs  *Obs
@@ -25,13 +42,15 @@ type DB struct {
 
 // NewDB creates the pool (connections are opened lazily, so the service starts
 // even if Postgres is down) and exports pool gauges.
-func (o *Obs) NewDB(ctx context.Context, dsn string, maxConns int32) (*DB, error) {
+func (o *Obs) NewDB(ctx context.Context, c DBConfig) (*DB, error) {
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable&connect_timeout=3",
+		c.User, os.Getenv("POSTGRES_PASSWORD"), c.Host, c.Port, c.Name)
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
-	if maxConns > 0 {
-		cfg.MaxConns = maxConns
+	if c.MaxConns > 0 {
+		cfg.MaxConns = c.MaxConns
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -59,30 +78,82 @@ func (d *DB) acquire(ctx context.Context) (*pgxpool.Conn, error) {
 	return conn, nil
 }
 
-// QueryRow runs a single-row query named `name` (used as the metric label) and scans into dest.
+// querier is what pgx connections and transactions have in common.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// timed runs one query and records its duration under the label `name`.
+func (d *DB) timed(name string, run func() error) error {
+	start := time.Now()
+	err := run()
+	DBQueryDuration.WithLabelValues(d.obs.Service, name).Observe(time.Since(start).Seconds())
+	return err
+}
+
+// QueryRow runs a single-row query and scans into dest.
 func (d *DB) QueryRow(ctx context.Context, name, sql string, args []any, dest ...any) error {
 	conn, err := d.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Release()
-	start := time.Now()
-	err = conn.QueryRow(ctx, sql, args...).Scan(dest...)
-	DBQueryDuration.WithLabelValues(d.obs.Service, name).Observe(time.Since(start).Seconds())
-	return err
+	return d.timed(name, func() error { return conn.QueryRow(ctx, sql, args...).Scan(dest...) })
 }
 
-// Exec runs a statement named `name`.
-func (d *DB) Exec(ctx context.Context, name, sql string, args ...any) (pgconn.CommandTag, error) {
+// Query runs a multi-row query; each(scan) is called once per row.
+func (d *DB) Query(ctx context.Context, name, sql string, args []any, each func(scan func(dest ...any) error) error) error {
 	conn, err := d.acquire(ctx)
 	if err != nil {
-		return pgconn.CommandTag{}, err
+		return err
 	}
 	defer conn.Release()
-	start := time.Now()
-	tag, err := conn.Exec(ctx, sql, args...)
-	DBQueryDuration.WithLabelValues(d.obs.Service, name).Observe(time.Since(start).Seconds())
-	return tag, err
+	return d.timed(name, func() error { return queryAll(ctx, conn, sql, args, each) })
+}
+
+func queryAll(ctx context.Context, q querier, sql string, args []any, each func(scan func(dest ...any) error) error) error {
+	rows, err := q.Query(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows.Scan); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// Tx is a transaction; it holds one pooled connection until it ends.
+type Tx struct {
+	d  *DB
+	tx pgx.Tx
+}
+
+// QueryRow runs a single-row query inside the transaction.
+func (t *Tx) QueryRow(ctx context.Context, name, sql string, args []any, dest ...any) error {
+	return t.d.timed(name, func() error { return t.tx.QueryRow(ctx, sql, args...).Scan(dest...) })
+}
+
+// InTx runs fn in a transaction: commit if fn returns nil, otherwise roll back.
+func (d *DB) InTx(ctx context.Context, fn func(tx *Tx) error) error {
+	conn, err := d.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	pgtx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	if err := fn(&Tx{d: d, tx: pgtx}); err != nil {
+		_ = pgtx.Rollback(context.WithoutCancel(ctx))
+		return err
+	}
+	return pgtx.Commit(ctx)
 }
 
 // ErrNoRows is re-exported so services don't need to import pgx directly.

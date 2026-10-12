@@ -3,7 +3,8 @@
 # Shop services are built from ./target-repo, a separate git repo created by
 # `make target-init` (the deploy simulator commits there). Every service-to-
 # dependency connection goes through Toxiproxy, the fault-injection point.
-# Host ports are bound to 127.0.0.1 only.
+# Host ports are bound to 127.0.0.1 only. Each service also listens on :9000
+# (internal fault hooks for the harness), which is deliberately NOT published.
 name: incident-responder
 
 services:
@@ -21,6 +22,26 @@ services:
       interval: 3s
       timeout: 3s
       retries: 40
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]   # pure cache, no persistence
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-m", "8222"]   # monitoring port, used only by the healthcheck
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   # ------------------------------------------------- fault-injection (harness)
@@ -59,6 +80,7 @@ services:
     ports: ["127.0.0.1:8081:8081"]
     depends_on:
       postgres: {condition: service_healthy}
+      nats: {condition: service_healthy}
       toxiproxy: {condition: service_started}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/healthz"]
@@ -80,14 +102,47 @@ services:
       retries: 20
     restart: unless-stopped
 
-  # Phase 2: inventory, notification, redis, nats
+  inventory:
+    build:
+      context: ./target-repo
+      args: {SERVICE: inventory, COMMIT: "${TARGET_COMMIT:-unknown}"}
+    image: incident-responder/inventory:local
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-incident}
+    ports: ["127.0.0.1:8083:8083"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      toxiproxy: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  notification:
+    build:
+      context: ./target-repo
+      args: {SERVICE: notification, COMMIT: "${TARGET_COMMIT:-unknown}"}
+    image: incident-responder/notification:local
+    ports: ["127.0.0.1:8084:8084"]
+    mem_limit: 128m           # a memory leak ends in an OOM kill + restart, as in production
+    memswap_limit: 128m       # = mem_limit: no swap (Docker's default would allow +128m of swap and delay the kill)
+    depends_on:
+      nats: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
   # ---------------------------------------------------- background traffic
   loadgen:
     build: ./loadgen
     image: incident-responder/loadgen:local
-    # Phase 1: no inventory yet, so no product listing in the mix.
-    command: ["--target=http://gateway:8080", "--rps=${LOADGEN_RPS:-10}", "--mix=create=75,get=25"]
+    command: ["--target=http://gateway:8080", "--rps=${LOADGEN_RPS:-10}"]
     depends_on:
       gateway: {condition: service_healthy}
     restart: unless-stopped

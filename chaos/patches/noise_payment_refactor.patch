@@ -1,0 +1,28 @@
+Subject: payment: extract charge request validation
+Author: Timur Akhmetov <timur.akhmetov@shop.example>
+
+diff --git a/payment/main.go b/payment/main.go
+index 171404a..506ad1b 100644
+--- a/payment/main.go
++++ b/payment/main.go
+@@ -55,7 +55,7 @@ func main() {
+ 
+ func (s *server) charge(w http.ResponseWriter, r *http.Request) {
+ 	var req chargeRequest
+-	if err := obs.ReadJSON(r, &req); err != nil || req.Amount <= 0 {
++	if err := obs.ReadJSON(r, &req); err != nil || !req.valid() {
+ 		obs.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid charge request"})
+ 		return
+ 	}
+@@ -82,6 +82,11 @@ func (s *server) charge(w http.ResponseWriter, r *http.Request) {
+ 	})
+ }
+ 
++// valid reports whether the charge request can be sent to the provider.
++func (c chargeRequest) valid() bool {
++	return c.Amount > 0 && c.CustomerID > 0
++}
++
+ func randomHex(n int) string {
+ 	b := make([]byte, n)
+ 	_, _ = crand.Read(b)

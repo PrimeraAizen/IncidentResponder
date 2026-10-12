@@ -8,6 +8,7 @@ Do NOT decide the root cause. The Diagnostician does that, combining your eviden
 - Logs are in Loki. The label `service` is the component name.
 - Service logs are JSON with fields: ts, level (INFO/WARN/ERROR), service, msg, route, method, status, latency_ms, trace_id, error, upstream.
 - `upstream` names the dependency involved in a failed or slow call (e.g. gateway logs upstream="order" when its call to order fails or is slow).
+- `location` (only on "panic recovered" lines) is the code location of a crash, e.g. `main.(*server).createOrder (order/main.go:112)`.
 - Every request produces one INFO line "http request" with status and latency_ms; requests answered with 5xx are logged at ERROR.
 
 # Tools (at most 4 calls in total)

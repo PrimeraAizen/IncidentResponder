@@ -4,8 +4,6 @@
 // POST /api/orders         → inventory POST /reserve → payment POST /charge (with retries) → order POST /orders
 // GET  /api/orders/{id}    → order GET /orders/{id}
 // Every downstream call goes through Toxiproxy (URLs in config.yaml).
-// An empty inventory_url means "inventory not deployed yet" (Phase 1): the
-// reserve step is skipped and a default unit price is used.
 package main
 
 import (
@@ -23,13 +21,12 @@ var (
 )
 
 type config struct {
-	ListenAddr        string  `yaml:"listen_addr"`
-	InventoryURL      string  `yaml:"inventory_url"`
-	PaymentURL        string  `yaml:"payment_url"`
-	OrderURL          string  `yaml:"order_url"`
-	PaymentRetries    int     `yaml:"payment_retries"` // retries after the first attempt
-	UpstreamTimeoutMS int     `yaml:"upstream_timeout_ms"`
-	DefaultUnitPrice  float64 `yaml:"default_unit_price"`
+	ListenAddr        string `yaml:"listen_addr"`
+	InventoryURL      string `yaml:"inventory_url"`
+	PaymentURL        string `yaml:"payment_url"`
+	OrderURL          string `yaml:"order_url"`
+	PaymentRetries    int    `yaml:"payment_retries"` // retries after the first attempt
+	UpstreamTimeoutMS int    `yaml:"upstream_timeout_ms"`
 }
 
 type server struct {
@@ -69,10 +66,6 @@ func main() {
 }
 
 func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
-	if !s.inventory.Configured() {
-		obs.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "inventory not configured"})
-		return
-	}
 	var products any
 	if err := s.inventory.Do(r.Context(), "GET", "/products", nil, &products); err != nil {
 		s.upstreamFailed(w, err)
@@ -90,19 +83,15 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// 1. Reserve stock (returns the unit price).
-	unitPrice := s.cfg.DefaultUnitPrice
-	if s.inventory.Configured() {
-		var res struct {
-			UnitPrice float64 `json:"unit_price"`
-		}
-		body := map[string]int{"product_id": req.ProductID, "quantity": req.Quantity}
-		if err := s.inventory.Do(ctx, "POST", "/reserve", body, &res); err != nil {
-			s.upstreamFailed(w, err)
-			return
-		}
-		unitPrice = res.UnitPrice
+	var reserved struct {
+		UnitPrice float64 `json:"unit_price"`
 	}
-	amount := unitPrice * float64(req.Quantity)
+	reserveBody := map[string]int{"product_id": req.ProductID, "quantity": req.Quantity}
+	if err := s.inventory.Do(ctx, "POST", "/reserve", reserveBody, &reserved); err != nil {
+		s.upstreamFailed(w, err)
+		return
+	}
+	amount := reserved.UnitPrice * float64(req.Quantity)
 
 	// 2. Charge the customer, retrying on errors/timeouts.
 	var charge struct {

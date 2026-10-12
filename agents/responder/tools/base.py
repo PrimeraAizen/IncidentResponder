@@ -57,11 +57,12 @@ class ToolContext:
         """Default comparison windows around the alert time A.
 
         Alerts fire some time after the fault starts (rule `for:` clause), so the
-        incident window starts 30 s before A and the baseline is the 5 minutes
-        ending 60 s before A. Short baselines keep older, unrelated events out.
+        incident window starts 30 s before A and the baseline is the 2 minutes
+        ending 60 s before A. A short baseline keeps older, unrelated events
+        (an earlier incident, a restart) out of the comparison.
         """
         baseline_end = self.incident_start - timedelta(seconds=60)
-        baseline_start = max(self.window_start, baseline_end - timedelta(minutes=5))
+        baseline_start = max(self.window_start, baseline_end - timedelta(minutes=2))
         return (baseline_start, baseline_end), (self.incident_start - timedelta(seconds=30), self.window_end)
 
 

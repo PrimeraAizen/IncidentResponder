@@ -1,0 +1,12 @@
+# Inventory service configuration (checked into the target repo).
+listen_addr: ":8083"
+db:
+  host: toxiproxy           # inventory→postgres goes through Toxiproxy
+  port: 15433
+  name: shop
+  user: shop                # password comes from env POSTGRES_PASSWORD
+  max_conns: 10
+  query_timeout_ms: 2000
+redis:
+  addr: "toxiproxy:16379"   # inventory→redis goes through Toxiproxy
+  ttl_s: 10                 # product list cache lifetime

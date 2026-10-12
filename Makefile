@@ -20,14 +20,15 @@ up: ## build + start everything, wait until healthy
 	@test -d target-repo/.git || { echo "target-repo/ is missing: run 'make target-init' first"; exit 1; }
 	$(COMPOSE) up -d --build --wait --wait-timeout 180
 	@./scripts/wait_ready.sh
+	@./scripts/toxiproxy_baseline.sh
 
 down: ## stop everything and delete its data
 	$(COMPOSE) down -v --remove-orphans
 
-reset: ## back to the healthy baseline (clear faults, reset target-repo)
+reset: ## back to the healthy baseline (clear faults, reset target-repo, clear deploy log)
 	$(UV) python -m chaos reset
 
-scenario: ## inject a scenario and write its alert: make scenario S=s01
+scenario: ## run a scenario (reset, noise deploys, warm-up, fault, symptom check, alert): make scenario S=s01
 	$(UV) python -m chaos scenario $(S)
 
 investigate: ## run the agents on an alert: make investigate ALERT=alerts/s01.json
@@ -40,5 +41,5 @@ load-report: ## per-agent share of calls: make load-report RUN=logs/run_xxx.json
 	@echo "eval/load_report.py arrives in Phase 4"; exit 1
 
 test: ## unit tests (pytest + go test)
-	$(UV) pytest agents/tests -q
+	$(UV) pytest -q
 	cd services && go test ./...

@@ -1,0 +1,16 @@
+Subject: gateway: point payment client at the new payment endpoint
+Author: Maria Ivanova <maria.ivanova@shop.example>
+
+diff --git a/gateway/config.yaml b/gateway/config.yaml
+index 5d66fe6..4ae5b2b 100644
+--- a/gateway/config.yaml
++++ b/gateway/config.yaml
+@@ -2,7 +2,7 @@
+ listen_addr: ":8080"
+ # Downstream services are reached through Toxiproxy (fault injection point).
+ inventory_url: "http://toxiproxy:18083"
+-payment_url: "http://toxiproxy:18082"
++payment_url: "http://toxiproxy:18092"
+ order_url: "http://toxiproxy:18081"
+ payment_retries: 3          # retries after the first attempt
+ upstream_timeout_ms: 3000   # per call

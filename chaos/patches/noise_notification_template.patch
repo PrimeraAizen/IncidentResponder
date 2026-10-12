@@ -1,0 +1,13 @@
+Subject: notification: friendlier order confirmation text
+Author: Dana Omarova <dana.omarova@shop.example>
+
+diff --git a/notification/config.yaml b/notification/config.yaml
+index 87df299..40d493d 100644
+--- a/notification/config.yaml
++++ b/notification/config.yaml
+@@ -2,4 +2,4 @@
+ listen_addr: ":8084"
+ nats_url: "nats://nats:4222"
+ subject: orders.created
+-template: "Thank you! Your order #{order_id} ({amount} USD) is confirmed."
++template: "Great choice! Order #{order_id} is confirmed - total {amount} USD. Enjoy your meal!"

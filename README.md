@@ -16,12 +16,13 @@ To evaluate it objectively, the repository also contains:
 | [docs/architecture.md](docs/architecture.md) | interaction scheme, agent loop, backend, anti-leakage boundary |
 | [docs/agents.md](docs/agents.md) | agent table: role, inputs, outputs, tools, completion criterion |
 | [docs/messages.md](docs/messages.md) | message schemas with JSON examples |
+| [docs/scenarios.md](docs/scenarios.md) | test scenarios: fault, alert, expected root cause, symptom check |
 | [docs/design-decisions.md](docs/design-decisions.md) | why multi-agent, why these roles, trade-offs, limitations |
 
-**Status:** Phase 1 (Assignment 2) is done.
-- Backend: gateway, order and payment, plus Postgres and the observability stack.
-- Scenario s01 can be injected.
-- Prototype: **Log Analyst + Metrics Analyst → Diagnostician**, exchanging structured messages, with every call logged.
+**Status:** Phase 2 is done.
+- Backend: all 5 services (gateway, order, payment, inventory, notification) with Postgres, Redis and NATS.
+- Harness: deploy simulator, noise deploys, in-process faults; scenarios **s01–s08** are reproducible and each one checks its own symptom.
+- Agents: the Phase 1 prototype, **Log Analyst + Metrics Analyst → Diagnostician**, exchanging structured messages, with every call logged.
 
 The remaining agents (Orchestrator, Change Investigator, Verifier, Reporter) arrive in Phase 3. See SPEC.md section 12.
 
@@ -65,7 +66,7 @@ For an offline dry run, set `LLM_PROVIDER=fake`. Every agent then returns a dete
 ## Demo (3 commands)
 
 ```bash
-make scenario S=s01                       # inject: payment becomes 2 s slower; waits ~90 s, writes alerts/s01.json
+make scenario S=s01                       # ~4.5 min: reset, 2 harmless deploys, warm-up, fault (payment +2 s), symptom check → alerts/s01.json
 make investigate ALERT=alerts/s01.json    # the agents investigate the alert
 make reset                                # back to the healthy baseline
 ```
@@ -87,7 +88,15 @@ make reset                                # back to the healthy baseline
 
 It then prints two tables: the evidence from each specialist and the ranked root-cause hypotheses. Expected result for s01: **root cause `payment`, fault type `latency`**. The alert only says that the *gateway* is slow.
 
-Other scenario commands: `uv run --project agents python -m chaos list` lists scenarios; `... chaos apply s01` injects a fault without waiting.
+Scenarios s01–s08 are described in [docs/scenarios.md](docs/scenarios.md). The harness CLI (`uv run --project agents python -m chaos …`):
+
+| Command | What it does |
+|---|---|
+| `list` | list scenarios |
+| `scenario s04` | full run: reset → noise deploys → warm-up → fault → symptom check → alert file |
+| `apply s04` | inject a fault immediately (no reset, no waiting) |
+| `deploy order s04_order_promotions.patch` | simulate a release: patch → commit → rebuild → `data/deploy_events.jsonl` |
+| `reset` | same as `make reset` |
 
 ## Where the output goes
 
@@ -97,6 +106,7 @@ Other scenario commands: `uv run --project agents python -m chaos list` lists sc
 | Final state of a run (plan, evidence bundles, hypotheses, failures) | `logs/run_<run_id>_result.json` |
 | Committed sample run (for grading) | `logs/sample/` |
 | Generated alerts | `alerts/` |
+| Deploy log (what the Change Investigator will read) | `data/deploy_events.jsonl`, git history of `target-repo/` |
 | Incident reports (Phase 3) | `reports/` |
 
 The CLI also prints each agent's share of all calls. The requirement is that no agent exceeds 40%.
@@ -126,7 +136,7 @@ make down          stop everything and delete its data
 make reset         back to the healthy baseline (clear faults, reset target-repo)
 make scenario      inject a scenario and write its alert: make scenario S=s01
 make investigate   run the agents on an alert: make investigate ALERT=alerts/s01.json
-make test          unit tests (pytest + go test)
+make test          unit tests (pytest: agents + harness; go test)
 make eval          run all scenarios and score them (Phase 4)
 make load-report   per-agent share of calls (Phase 4)
 ```
@@ -134,12 +144,13 @@ make load-report   per-agent share of calls (Phase 4)
 ## Repository layout
 
 ```
-services/        Go services (gateway, order, payment; Phase 2: inventory, notification) + pkg/obs
+services/        Go services (gateway, order, payment, inventory, notification) + pkg/obs
 target-repo/     (gitignored) git repo copied from services/; compose builds from here
-infra/           Prometheus (+ alert rules), Loki, Alloy, Grafana (datasources + dashboard), Toxiproxy, Postgres seed
+infra/           Prometheus (+ alert rules), Loki, Alloy, Grafana (datasources + dashboard), Toxiproxy (+ baseline DB latency), Postgres seed
 loadgen/         Go load generator (always-on background traffic)
-chaos/           fault injection CLI (Toxiproxy, later docker stop / deploy simulator)
-scenarios/       sNN_*.yaml: fault + alert + expected root cause
+chaos/           harness CLI: faults (Toxiproxy, docker stop, /admin/chaos), deploy simulator, patches/
+scenarios/       sNN_*.yaml: fault + alert + expected root cause + symptom check
+tests/           harness tests (scenario files, patches apply)
 agents/          Python package `responder` (uv project)
   responder/     schemas, llm, runtime, calllog, graph, cli, agents/ (+ prompts/), tools/
   tests/         pytest
@@ -150,14 +161,14 @@ docs/            architecture, agents, messages, design decisions
 
 | Problem | Fix |
 |---|---|
-| `make up` fails with "port is already allocated" | Something else uses 8080–8082, 3000, 3100, 9090 or 8474. Stop it (`lsof -i :8080`) or change the host port in `docker-compose.yml`. |
+| `make up` fails with "port is already allocated" | Something else uses 8080–8084, 3000, 3100, 9090 or 8474. Stop it (`lsof -i :8080`) or change the host port in `docker-compose.yml`. |
 | Containers restart or are OOM-killed | Give Docker ≥ 6 GB of memory (Docker Desktop → Settings → Resources). |
 | `target-repo/ is missing` | Run `make target-init` once. |
 | `LLM_API_KEY is not set` | `cp .env.example .env` and fill in the LLM section, or use `LLM_PROVIDER=fake`. |
 | `429 … exceeded your current quota` | Set `LLM_MAX_RPM` to your plan's per-minute limit (Gemini free tier: 5). If the *daily* quota is used up, switch `LLM_MODEL`: quotas are per model. |
 | `503 … model is currently experiencing high demand` | The provider is overloaded (temporary). Retry later, or use another model, e.g. `LLM_MODEL=gemini-3.5-flash make investigate ALERT=…`. |
 | `400 … missing a thought_signature` | Fixed: the runtime sends Gemini's assistant messages back unchanged. If you see it, you are on an old checkout. |
-| `make scenario` says gateway is not healthy | `make reset` (or `make up`), then retry. |
+| A symptom check prints ✗ | The fault did not fully develop (e.g. Docker was very slow). Run the scenario again; `make reset` first if anything looks stuck. |
 | Metrics evidence says "series did not exist in the baseline" | The stack was started very recently. `make scenario` waits for a warm-up, but give it a couple of minutes of normal traffic first. |
 | No logs in Grafana right after `make up` | Loki needs ~15–30 s. `make up` waits for Loki to be ready. |
 | Start from scratch | `make down && rm -rf target-repo && make target-init && make up` |

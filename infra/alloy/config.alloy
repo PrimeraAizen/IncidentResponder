@@ -6,6 +6,9 @@
 
 discovery.docker "containers" {
   host = "unix:///var/run/docker.sock"
+  // Deploys recreate containers (new id). The default 1m refresh would lose the
+  // first minute of logs of a freshly deployed service - exactly the interesting part.
+  refresh_interval = "5s"
   filter {
     name   = "label"
     values = ["com.docker.compose.project=incident-responder"]

@@ -135,13 +135,22 @@ flowchart LR
     PROM & LOKI --> GRAF
 ```
 
-Phase 1 runs gateway, order, payment, postgres and the full observability stack. Inventory, notification, redis and nats arrive in Phase 2.
+All of it runs in Docker Compose (`make up`):
+- **gateway** — the public API. `POST /api/orders` = inventory `/reserve` → payment `/charge` (3 retries) → order `/orders`.
+- **inventory** — reads the product list from a Redis cache, falling back to Postgres.
+- **order** — writes orders to Postgres in a transaction, then publishes `orders.created` to NATS.
+- **payment** — a mocked external provider.
+- **notification** — consumes `orders.created` events.
+
+A load generator sends ~10 rps of realistic traffic all the time. The database connections carry a constant ~20 ms network round trip, modelling a separate database server (see design decisions).
 
 - **Every service-to-dependency connection goes through Toxiproxy.** Latency, timeouts and outages can be injected without touching service code.
 - **Uniform telemetry** comes from the shared `pkg/obs` package:
   - JSON logs with fields `ts, level, service, msg, route, method, status, latency_ms, trace_id, error, upstream`
   - standard metrics `http_requests_total`, `http_request_duration_seconds`, `upstream_request_*`, `db_*`, `build_info`, …
 - **`target-repo/`** is a separate git repository with a copy of `services/`. Compose builds the images from it, so "bad deploy" scenarios produce real commits and real `build_info{commit}` changes.
+- **The deploy simulator** (`chaos/deploy_sim.py`) makes real releases: `git apply` a patch, bump `VERSION`, commit as a (fictional) team member, rebuild, append to `data/deploy_events.jsonl`. Before every scenario it also makes two **harmless** releases in unrelated services, so "the latest deploy is guilty" is not a winning strategy.
+- **In-process faults** (memory leak, goroutine leak, CPU burn) are switched on through `/admin/chaos` on each service's internal port 9000. The port is not published, and switching is not logged.
 
 ### Anti-leakage boundary
 
@@ -149,6 +158,7 @@ The agents must find the root cause the way an on-call engineer would. They may 
 
 - `scenarios/`, `chaos/`, the Toxiproxy API, `/admin/chaos`;
 - Toxiproxy and loadgen logs: Alloy ships logs only from the system's own components;
+- the internal admin port (`:9000`): unpublished, and toggling a fault leaves no log line;
 - the scenario id: the alert file contains only the symptom.
 
 `agents/tests/test_tools_registry.py` enforces the tool allow-list.

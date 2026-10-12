@@ -1,19 +1,22 @@
-// Order service: stores orders in PostgreSQL.
+// Order service: stores orders in PostgreSQL and announces them on NATS.
 //
-// POST /orders  — fraud check (recent orders of the customer) + insert.
-// GET  /orders/{id}
-// All DB access goes through Toxiproxy (order→postgres) so DB faults can be
-// injected; the pool size comes from config.yaml (resource-exhaustion scenario).
+// POST /orders runs a fraud check (recent orders of the customer) and the
+// insert in one transaction, then publishes `orders.created`.
+// GET /orders/{id} reads one order.
+// DB and NATS traffic go through Toxiproxy (order→postgres, order→nats) so
+// faults can be injected; the pool size comes from config.yaml.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/nats-io/nats.go"
 
 	"shop/pkg/obs"
 )
@@ -24,15 +27,10 @@ var (
 )
 
 type config struct {
-	ListenAddr string `yaml:"listen_addr"`
-	DB         struct {
-		Host           string `yaml:"host"`
-		Port           int    `yaml:"port"`
-		Name           string `yaml:"name"`
-		User           string `yaml:"user"`
-		MaxConns       int32  `yaml:"max_conns"`
-		QueryTimeoutMS int    `yaml:"query_timeout_ms"`
-	} `yaml:"db"`
+	ListenAddr string       `yaml:"listen_addr"`
+	DB         obs.DBConfig `yaml:"db"`
+	NATSURL    string       `yaml:"nats_url"`
+	Subject    string       `yaml:"subject"` // event published for every new order
 	// A customer with more orders than this in the last minute is rejected.
 	MaxOrdersPerMinute int `yaml:"max_orders_per_minute"`
 }
@@ -41,6 +39,7 @@ type server struct {
 	o   *obs.Obs
 	cfg config
 	db  *obs.DB
+	nc  *nats.Conn
 }
 
 type orderRequest struct {
@@ -61,6 +60,8 @@ type order struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+var errTooManyOrders = errors.New("too many orders")
+
 func main() {
 	o := obs.New("order", version, commit)
 	var cfg config
@@ -68,23 +69,22 @@ func main() {
 		o.Log.Error("cannot load config", "error", err.Error())
 		os.Exit(1)
 	}
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable&connect_timeout=3",
-		cfg.DB.User, os.Getenv("POSTGRES_PASSWORD"), cfg.DB.Host, cfg.DB.Port, cfg.DB.Name)
-	db, err := o.NewDB(context.Background(), dsn, cfg.DB.MaxConns)
+	db, err := o.NewDB(context.Background(), cfg.DB)
 	if err != nil {
 		o.Log.Error("invalid database config", "error", err.Error())
 		os.Exit(1)
 	}
-	s := &server{o: o, cfg: cfg, db: db}
+	nc, err := o.ConnectNATS(cfg.NATSURL)
+	if err != nil {
+		o.Log.Error("invalid nats config", "error", err.Error())
+		os.Exit(1)
+	}
+	s := &server{o: o, cfg: cfg, db: db, nc: nc}
 
 	mux := o.NewMux()
 	mux.HandleFunc("POST /orders", s.createOrder)
 	mux.HandleFunc("GET /orders/{id}", s.getOrder)
 	o.Serve(cfg.ListenAddr, mux)
-}
-
-func (s *server) queryCtx(r *http.Request) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(r.Context(), time.Duration(s.cfg.DB.QueryTimeoutMS)*time.Millisecond)
 }
 
 func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
@@ -93,33 +93,49 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		obs.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid order"})
 		return
 	}
-	ctx, cancel := s.queryCtx(r)
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.DB.QueryTimeout())
 	defer cancel()
 
-	// Fraud check: uses the (customer_id, created_at) index on orders.
-	var recent int
-	err := s.db.QueryRow(ctx, "recent_orders",
-		`SELECT count(*) FROM orders WHERE customer_id = $1 AND created_at > now() - interval '1 minute'`,
-		[]any{req.CustomerID}, &recent)
-	if err != nil {
-		s.dbError(w, r, "recent_orders", err)
-		return
-	}
-	if recent >= s.cfg.MaxOrdersPerMinute {
+	o := order{CustomerID: req.CustomerID, ProductID: req.ProductID, Quantity: req.Quantity, Amount: req.Amount, Status: "confirmed"}
+	err := s.db.InTx(ctx, func(tx *obs.Tx) error {
+		// Fraud check: uses the (customer_id, created_at) index on orders.
+		var recent int
+		if err := tx.QueryRow(ctx, "recent_orders",
+			`SELECT count(*) FROM orders WHERE customer_id = $1 AND created_at > now() - interval '1 minute'`,
+			[]any{req.CustomerID}, &recent); err != nil {
+			return err
+		}
+		if recent >= s.cfg.MaxOrdersPerMinute {
+			return errTooManyOrders
+		}
+		return tx.QueryRow(ctx, "insert_order",
+			`INSERT INTO orders (customer_id, product_id, quantity, amount, charge_id, status)
+			 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
+			[]any{o.CustomerID, o.ProductID, o.Quantity, o.Amount, req.ChargeID, o.Status}, &o.ID, &o.CreatedAt)
+	})
+	if errors.Is(err, errTooManyOrders) {
 		obs.WriteJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many orders"})
 		return
 	}
-
-	o := order{CustomerID: req.CustomerID, ProductID: req.ProductID, Quantity: req.Quantity, Amount: req.Amount, Status: "confirmed"}
-	err = s.db.QueryRow(ctx, "insert_order",
-		`INSERT INTO orders (customer_id, product_id, quantity, amount, charge_id, status)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
-		[]any{o.CustomerID, o.ProductID, o.Quantity, o.Amount, req.ChargeID, o.Status}, &o.ID, &o.CreatedAt)
 	if err != nil {
-		s.dbError(w, r, "insert_order", err)
+		s.dbError(w, r, "create_order", err)
 		return
 	}
+	s.publishCreated(r.Context(), o)
 	obs.WriteJSON(w, http.StatusCreated, o)
+}
+
+// publishCreated announces the order. A failure is logged but does not fail
+// the request: the order is already stored.
+func (s *server) publishCreated(ctx context.Context, o order) {
+	payload, _ := json.Marshal(o)
+	if err := s.nc.Publish(s.cfg.Subject, payload); err != nil {
+		obs.EventsPublished.WithLabelValues("order", "error").Inc()
+		s.o.Log.ErrorContext(ctx, "event publish failed", "upstream", "nats", "subject", s.cfg.Subject,
+			"error", err.Error(), "trace_id", obs.TraceID(ctx))
+		return
+	}
+	obs.EventsPublished.WithLabelValues("order", "ok").Inc()
 }
 
 func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +144,7 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 		obs.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
 		return
 	}
-	ctx, cancel := s.queryCtx(r)
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.DB.QueryTimeout())
 	defer cancel()
 
 	var o order

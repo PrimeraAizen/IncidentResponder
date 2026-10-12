@@ -1,0 +1,23 @@
+id: s03_redis_down
+description: The Redis cache container is stopped; inventory falls back to PostgreSQL.
+setup:
+  - docker: {stop: redis}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighLatency
+  service: inventory
+  severity: warning
+  summary: "p95 latency of GET /products far above normal (usually < 10 ms)"
+expected:
+  root_cause_service: redis
+  fault_type: dependency_down
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: inventory GET /products p95 latency (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="inventory",route="/products"}[1m])))
+    above: 0.05
+  - description: cache errors per second
+    promql: sum(rate(cache_requests_total{service="inventory",result="error"}[1m]))
+    above: 0.5

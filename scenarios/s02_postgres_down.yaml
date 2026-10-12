@@ -1,0 +1,20 @@
+id: s02_postgres_down
+description: The PostgreSQL container is stopped.
+setup:
+  - docker: {stop: postgres}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighErrorRate
+  service: gateway
+  severity: critical
+  summary: "5xx ratio of gateway requests > 5%"
+expected:
+  root_cause_service: postgres
+  fault_type: dependency_down
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: gateway 5xx ratio
+    promql: 'sum(rate(http_requests_total{service="gateway",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="gateway"}[1m]))'
+    above: 0.2

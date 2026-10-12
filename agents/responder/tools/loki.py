@@ -24,7 +24,8 @@ PATTERN_FETCH_LIMIT = 5000  # Loki max_entries_limit_per_query
 WARN_ERROR_FILTER = r'|~ "(?i)(\"level\":\"(warn|error)\"|error|fatal|panic|timeout|refused)"'
 _SERVICE_RE = re.compile(r"^[a-z0-9_-]+$")
 # Fields worth keeping when a JSON log line is shown to the LLM.
-_KEEP_FIELDS = ("level", "msg", "route", "method", "status", "latency_ms", "upstream", "query", "error", "attempt")
+_KEEP_FIELDS = ("level", "msg", "route", "method", "status", "latency_ms", "upstream", "query", "error",
+                "location", "attempt")
 
 
 # ------------------------------------------------------------------- HTTP helper

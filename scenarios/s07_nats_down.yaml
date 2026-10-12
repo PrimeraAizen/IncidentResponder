@@ -1,0 +1,23 @@
+id: s07_nats_down
+description: The NATS container is stopped; orders still succeed but events are lost.
+setup:
+  - docker: {stop: nats}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: EventPublishErrors
+  service: order
+  severity: warning
+  summary: "order fails to publish orders.created events"
+expected:
+  root_cause_service: nats
+  fault_type: dependency_down
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: failed event publishes per second
+    promql: sum(rate(events_published_total{service="order",status="error"}[1m]))
+    above: 0.5
+  - description: gateway 5xx ratio (orders must still succeed)
+    promql: 'sum(rate(http_requests_total{service="gateway",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="gateway"}[1m]))'
+    below: 0.05

@@ -1,0 +1,22 @@
+id: s08_gateway_misconfig
+description: A gateway config deploy points the payment client at a wrong port; every order fails with 502.
+setup:
+  - deploy: {service: gateway, patch: s08_gateway_payment_url.patch}
+noise_deploys: [notification, inventory]   # a payment restart would mimic this fault's error pattern
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighErrorRate
+  service: gateway
+  severity: critical
+  summary: "5xx ratio of gateway requests > 5% (502 Bad Gateway)"
+expected:
+  root_cause_service: gateway
+  fault_type: misconfiguration
+  suspect_commit: from_deploy
+  accepted_services: []
+  must_not_blame: [payment]
+symptom:
+  - description: gateway 5xx ratio
+    promql: 'sum(rate(http_requests_total{service="gateway",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="gateway"}[1m]))'
+    above: 0.1
