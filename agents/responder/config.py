@@ -46,6 +46,22 @@ class Settings:
     logs_dir: Path
     data_dir: Path
     reports_dir: Path
+    target_repo: Path          # git history the Change Investigator reads
+    # Live system access for tools
+    compose_project: str       # Docker Compose project whose containers docker_inspect may read
+    services_host: str         # where the services' /healthz ports are published
+
+    @property
+    def deploy_events_path(self) -> Path:
+        return self.data_dir / "deploy_events.jsonl"
+
+    @property
+    def state_db_path(self) -> Path:
+        return self.data_dir / "incidents.db"
+
+    @property
+    def checkpoint_db_path(self) -> Path:
+        return self.data_dir / "checkpoints.db"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -71,4 +87,7 @@ class Settings:
             logs_dir=REPO_ROOT / "logs",
             data_dir=REPO_ROOT / "data",
             reports_dir=REPO_ROOT / "reports",
+            target_repo=Path(os.getenv("TARGET_REPO", REPO_ROOT / "target-repo")),
+            compose_project=os.getenv("COMPOSE_PROJECT", "incident-responder"),
+            services_host=os.getenv("SERVICES_HOST", "localhost"),
         )

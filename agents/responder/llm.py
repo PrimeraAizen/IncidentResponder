@@ -201,6 +201,20 @@ class OpenAICompatLLM(LLM):
 # --------------------------------------------------------------------------- fake
 # Canned outputs are clearly marked "[fake]" so they are never mistaken for real reasoning.
 FAKE_SCRIPTS: dict[str, dict[str, Any]] = {
+    "orchestrator": {
+        "tool_calls": [],
+        "final": {"lookback_minutes": 10, "focus_services": ["gateway", "payment", "order", "inventory"],
+                  "tasks": [{"agent": "log_analyst", "objective": "[fake] find error patterns around the alert"},
+                            {"agent": "metrics_analyst", "objective": "[fake] compare latency and errors to baseline"},
+                            {"agent": "change_investigator", "objective": "[fake] list recent deploys and restarts"}]},
+    },
+    "change_investigator": {
+        "tool_calls": [("deploy_events", {}), ("docker_inspect", {})],
+        "final": {"status": "ok", "notes": "[fake] canned output", "evidence": [{
+            "evidence_id": "x", "source": "changes", "service": "notification",
+            "signal": "[fake] notification deployed 2 min before the alert (template text change)",
+            "strength": 0.1, "raw_ref": "abc1234"}]},
+    },
     "log_analyst": {
         "tool_calls": [("error_pattern_summary", {})],
         "final": {"status": "ok", "notes": "[fake] canned output", "evidence": [{
@@ -224,6 +238,21 @@ FAKE_SCRIPTS: dict[str, dict[str, Any]] = {
             "explanation": "[fake] gateway waits on slow payment calls",
             "supporting_evidence": ["logs-1", "metrics-1"], "suspect_commit": None, "confidence": 0.7}]},
     },
+    "verifier": {
+        "tool_calls": [("prom_query", {"promql": "histogram_quantile(0.95, sum by (le, target) "
+                                                 "(rate(upstream_request_duration_seconds_bucket{service=\"gateway\"}[1m])))"}),
+                       ("health_check", {"service": "payment"})],
+        "final": {"hypothesis_id": "h1", "status": "confirmed", "reasoning": "[fake] canned verdict", "checks": [{
+            "evidence_id": "v", "source": "verification", "service": "gateway",
+            "signal": "[fake] gateway→payment p95 still high; other targets normal", "strength": 0.8,
+            "raw_ref": "prom_query"}]},
+    },
+    "reporter": {
+        "tool_calls": [],
+        "final": {"summary": "[fake] canned report summary",
+                  "timeline": ["[fake] alert fired"], "recommended_actions": ["[fake] check the payment provider"],
+                  "evidence_refs": ["logs-1", "metrics-1", "verify-1"], "limitations": []},
+    },
 }
 
 
@@ -231,8 +260,10 @@ class FakeLLM(LLM):
     """Replays a two-step script per agent: canned tool calls, then canned final JSON.
 
     The tool calls are executed for real by the runtime, so tool code, budgets and
-    logging are exercised. `fail_agents` raise TransientLLMError (tests retries and
-    degradation); `invalid_json_agents` first answer with broken JSON (tests the repair call).
+    logging are exercised. `final` may be a list: the n-th time the agent answers,
+    it gets the n-th element (the last one repeats) - used to test the verify loop.
+    `fail_agents` raise TransientLLMError (tests retries and degradation);
+    `invalid_json_agents` first answer with broken JSON (tests the repair call).
     """
 
     model_name = "fake"
@@ -243,6 +274,7 @@ class FakeLLM(LLM):
         self.scripts = scripts if scripts is not None else FAKE_SCRIPTS
         self.fail_agents = fail_agents or set()
         self.invalid_json_agents = set(invalid_json_agents or ())
+        self.answers: dict[str, int] = {}  # final answers given per agent
 
     def _complete(self, agent, messages, tools, allow_tools) -> LLMResponse:
         if agent in self.fail_agents:
@@ -257,7 +289,11 @@ class FakeLLM(LLM):
         if agent in self.invalid_json_agents:
             self.invalid_json_agents.discard(agent)  # only the first answer is broken
             return LLMResponse("this is not JSON", [], tokens_in, 5)
-        content = json.dumps(script["final"])
+        final = script["final"]
+        if isinstance(final, list):
+            final = final[min(self.answers.get(agent, 0), len(final) - 1)]
+        self.answers[agent] = self.answers.get(agent, 0) + 1
+        content = json.dumps(final)
         return LLMResponse(content, [], tokens_in, len(content) // 4)
 
     def _retry_wait(self, state: RetryCallState) -> float:

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -35,6 +35,8 @@ class RunContext:
     llm: LLM
     calllog: CallLogger
     http: httpx.Client
+    store: Any = None   # StateStore: every node saves its output there (None in some unit tests)
+    docker: Any = None  # Docker SDK client shared by docker_inspect calls (tests inject a fake)
 
 
 @dataclass
@@ -116,21 +118,29 @@ def execute_tool(spec: AgentSpec, call: ToolCall, run: RunContext, tool_ctx: Too
         run.calllog.log(agent=spec.name, call_type="tool", name=tool.name, latency_ms=0, status="error",
                         error=f"invalid arguments: {_short(exc)}")
         return json.dumps({"error": f"invalid arguments: {_short(exc)}"})
+    return truncate_result(run_tool(spec.name, tool, args, run, tool_ctx))
 
+
+def run_tool(agent: str, tool: Tool, args: BaseModel, run: RunContext, tool_ctx: ToolContext) -> dict:
+    """Run one tool with retries + logging. Never raises: failures come back as {"error": ...}.
+
+    Used for tool calls requested by the LLM (above) and for tools an agent's code
+    runs itself (the Reporter's write_report).
+    """
     started = time.monotonic()
     label = f"{tool.name}({_short_args(args)})"
     try:
-        result = run.calllog.call(agent=spec.name, call_type="tool", name=tool.name,
+        result = run.calllog.call(agent=agent, call_type="tool", name=tool.name,
                                   fn=lambda: tool.fn(args, tool_ctx), is_retryable=is_retryable_http,
                                   attempts=run.settings.retry_attempts)
     except ToolError as exc:
-        run.calllog.trace(spec.name, f"{label} ✗ {exc}", "yellow")
-        return json.dumps({"error": str(exc)})
+        run.calllog.trace(agent, f"{label} ✗ {exc}", "yellow")
+        return {"error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - data source down etc.: tell the LLM, keep going
-        run.calllog.trace(spec.name, f"{label} ✗ {type(exc).__name__}: {_short(exc)}", "red")
-        return json.dumps({"error": f"{tool.name} failed: {type(exc).__name__}: {_short(exc)}"})
-    run.calllog.trace(spec.name, f"{label} ✓ {int((time.monotonic() - started) * 1000)} ms", "green")
-    return truncate_result(result)
+        run.calllog.trace(agent, f"{label} ✗ {type(exc).__name__}: {_short(exc)}", "red")
+        return {"error": f"{tool.name} failed: {type(exc).__name__}: {_short(exc)}"}
+    run.calllog.trace(agent, f"{label} ✓ {int((time.monotonic() - started) * 1000)} ms", "green")
+    return result
 
 
 def _short(exc: Exception | str, limit: int = 240) -> str:

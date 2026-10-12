@@ -14,6 +14,7 @@ Setup step types:
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -71,8 +72,14 @@ def load_scenario(scenario_id: str) -> Scenario:
     return Scenario.model_validate(yaml.safe_load(matches[0].read_text(encoding="utf-8")))
 
 
-def apply_setup(scn: Scenario) -> list[str]:
-    """Execute the scenario's fault steps; returns a human-readable line per step."""
+@dataclass
+class StepResult:
+    description: str
+    deploy_event: dict | None = None  # set for deploy steps: the commit the scenario expects to be blamed
+
+
+def apply_setup(scn: Scenario) -> list[StepResult]:
+    """Execute the scenario's fault steps in order."""
     done = []
     for step in scn.setup:
         if len(step) != 1:
@@ -81,17 +88,18 @@ def apply_setup(scn: Scenario) -> list[str]:
         spec = dict(spec)
         if kind == "toxic":
             faults.add_toxic(spec.pop("proxy"), spec.pop("type"), **spec)
-            done.append(f"toxic {step['toxic']}")
+            done.append(StepResult(f"toxic {step['toxic']}"))
         elif kind == "docker":
             faults.stop_service(spec["stop"])
-            done.append(f"docker stop {spec['stop']}")
+            done.append(StepResult(f"docker stop {spec['stop']}"))
         elif kind == "chaos":
             service = spec.pop("service")
             faults.set_chaos_flags(service, **spec)
-            done.append(f"/admin/chaos on {service}: {spec}")
+            done.append(StepResult(f"/admin/chaos on {service}: {spec}"))
         elif kind == "deploy":
             event = deploy_sim.deploy(spec["service"], spec["patch"])
-            done.append(f"deploy {event['service']} {event['version']} ({event['commit']}): {event['message']}")
+            done.append(StepResult(f"deploy {event['service']} {event['version']} ({event['commit']}): "
+                                   f"{event['message']}", deploy_event=event))
         else:
             raise ValueError(f"unknown setup step {kind!r} (known: {sorted(STEP_TYPES)})")
     return done

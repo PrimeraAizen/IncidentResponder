@@ -7,8 +7,9 @@ COMPOSE := TARGET_COMMIT=$$(git -C target-repo rev-parse --short HEAD 2>/dev/nul
 
 S ?= s01
 ALERT ?= alerts/$(S).json
+REPEATS ?= 1
 
-.PHONY: help target-init up down reset scenario investigate eval load-report test
+.PHONY: help target-init up down reset scenario investigate eval-scenario eval load-report test
 
 help: ## show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
@@ -33,6 +34,9 @@ scenario: ## run a scenario (reset, noise deploys, warm-up, fault, symptom check
 
 investigate: ## run the agents on an alert: make investigate ALERT=alerts/s01.json
 	$(UV) responder investigate --alert $(ALERT)
+
+eval-scenario: ## evaluate the agents end to end: make eval-scenario S="s01 s02" REPEATS=1
+	$(UV) python eval/run_scenario.py $(S) --repeats $(REPEATS)
 
 eval: ## run all scenarios and score them (Phase 4)
 	@echo "eval/run_all.py arrives in Phase 4"; exit 1

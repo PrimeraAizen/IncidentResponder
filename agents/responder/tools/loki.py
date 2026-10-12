@@ -100,8 +100,13 @@ def line_pattern(line: str) -> str:
     return normalize(_PLAIN_TS.sub("", line))[:200]
 
 
-def summarize_patterns(entries: list[tuple[int, str, str]], top: int = 10) -> list[dict]:
-    """Group (ts_ns, service, line) entries by (service, pattern); most frequent first."""
+def summarize_patterns(entries: list[tuple[int, str, str]], top: int = 10,
+                       alert_ns: int | None = None) -> list[dict]:
+    """Group (ts_ns, service, line) entries by (service, pattern); most frequent first.
+
+    With alert_ns, each pattern also says when it started/stopped relative to the
+    alert in seconds (negative = before), e.g. first_vs_alert_s=-35 means "35 s before".
+    """
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     for ts, service, line in entries:
         key = (service, line_pattern(line))
@@ -109,10 +114,16 @@ def summarize_patterns(entries: list[tuple[int, str, str]], top: int = 10) -> li
         g["count"] += 1
         g["first"], g["last"] = min(g["first"], ts), max(g["last"], ts)
     ranked = sorted(groups.items(), key=lambda kv: kv[1]["count"], reverse=True)[:top]
-    return [{"service": svc, "pattern": pattern, "count": g["count"],
-             "first_seen": _iso_ns(g["first"]), "last_seen": _iso_ns(g["last"]),
-             "example": compact_line(g["example"])}
-            for (svc, pattern), g in ranked]
+    result = []
+    for (svc, pattern), g in ranked:
+        item = {"service": svc, "pattern": pattern, "count": g["count"],
+                "first_seen": _iso_ns(g["first"]), "last_seen": _iso_ns(g["last"])}
+        if alert_ns is not None:
+            item["first_vs_alert_s"] = (g["first"] - alert_ns) // 1_000_000_000
+            item["last_vs_alert_s"] = (g["last"] - alert_ns) // 1_000_000_000
+        item["example"] = compact_line(g["example"])
+        result.append(item)
+    return result
 
 
 # -------------------------------------------------------------------- tools
@@ -155,7 +166,8 @@ def error_pattern_summary(args: ErrorPatternArgs, ctx: ToolContext) -> dict:
     lines = _fetch_lines(ctx, f"{selector} {WARN_ERROR_FILTER}", start, end, PATTERN_FETCH_LIMIT)
     result: dict[str, Any] = {"service": args.service or "all",
                               "window": [start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")],
-                              "matching_lines": len(lines), "patterns": summarize_patterns(lines)}
+                              "matching_lines": len(lines),
+                              "patterns": summarize_patterns(lines, alert_ns=_ns(ctx.incident_start))}
     if len(lines) >= PATTERN_FETCH_LIMIT:
         result["note"] = "line limit reached: only the newest lines were analyzed, first_seen may be later than the real onset"
     return result

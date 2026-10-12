@@ -23,8 +23,10 @@ NOW = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    return dataclasses.replace(Settings.from_env(), llm_provider="fake", logs_dir=tmp_path,
-                               max_tool_calls_per_agent=4, max_llm_calls_per_agent=3, retry_attempts=3)
+    return dataclasses.replace(Settings.from_env(), llm_provider="fake", logs_dir=tmp_path / "logs",
+                               data_dir=tmp_path / "data", reports_dir=tmp_path / "reports",
+                               target_repo=tmp_path / "target-repo", max_tool_calls_per_agent=4,
+                               max_llm_calls_per_agent=3, max_verify_loops=2, retry_attempts=3)
 
 
 @pytest.fixture
@@ -52,6 +54,8 @@ def fake_observability(request: httpx.Request) -> httpx.Response:
     if path == "/api/v1/query":
         return httpx.Response(200, json={"status": "success", "data": {"resultType": "vector", "result": [
             {"metric": {"service": "gateway"}, "value": [NOW.timestamp(), "1"]}]}})
+    if path == "/healthz":
+        return httpx.Response(200, json={"status": "ok", "checks": {"postgres": "ok"}})
     if path == "/loki/api/v1/query_range":
         ts = int((NOW - timedelta(minutes=1)).timestamp() * 1e9)
         line = json.dumps({"level": "WARN", "msg": "slow upstream response", "service": "gateway",
@@ -67,10 +71,37 @@ def http() -> httpx.Client:
         yield client
 
 
+class FakeContainer:
+    def __init__(self, service: str, status: str = "running", restarts: int = 0, oom: bool = False):
+        self.labels = {"com.docker.compose.service": service, "com.docker.compose.oneoff": "False"}
+        self.attrs = {"RestartCount": restarts, "Config": {"Image": f"incident-responder/{service}:local"},
+                      "State": {"Status": status, "OOMKilled": oom, "ExitCode": 0 if status == "running" else 137,
+                                "StartedAt": "2026-10-06T11:50:00.123456789Z",
+                                "FinishedAt": "0001-01-01T00:00:00Z" if status == "running" else "2026-10-06T11:59:00Z",
+                                "Health": {"Status": "healthy" if status == "running" else "unhealthy"}}}
+
+
+class FakeDocker:
+    """Just enough of docker.DockerClient for docker_inspect."""
+    def __init__(self, containers: list[FakeContainer]):
+        self.containers = self
+        self._containers = containers
+
+    def list(self, all: bool = False, filters: dict | None = None) -> list[FakeContainer]:
+        return self._containers
+
+
 @pytest.fixture
-def make_ctx(settings, http, tmp_path):
-    """Factory: RunContext with a FakeLLM (optionally failing / returning invalid JSON)."""
-    def factory(**fake_kwargs) -> RunContext:
+def fake_docker() -> FakeDocker:
+    return FakeDocker([FakeContainer(s) for s in ("gateway", "order", "payment", "inventory", "notification",
+                                                  "postgres", "redis", "nats")])
+
+
+@pytest.fixture
+def make_ctx(settings, http, tmp_path, fake_docker):
+    """Factory: RunContext with a FakeLLM (optionally failing / returning invalid JSON / custom scripts)."""
+    def factory(store=None, **fake_kwargs) -> RunContext:
         calllog = CallLogger(tmp_path / "run_test.jsonl", "run-test", "inc-test")
-        return RunContext(settings=settings, llm=FakeLLM(calllog, **fake_kwargs), calllog=calllog, http=http)
+        return RunContext(settings=settings, llm=FakeLLM(calllog, **fake_kwargs), calllog=calllog, http=http,
+                          store=store, docker=fake_docker)
     return factory

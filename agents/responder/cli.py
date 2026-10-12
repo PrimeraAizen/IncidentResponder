@@ -34,7 +34,7 @@ def main() -> None:
 @app.command()
 def investigate(alert: Path = typer.Option(..., "--alert", "-a", exists=True, dir_okay=False,
                                            help="Alert JSON file (e.g. written by `make scenario`).")) -> None:
-    """Investigate one alert and print the root-cause hypotheses."""
+    """Investigate one alert: plan, evidence, hypotheses, verification, report."""
     console = Console()
     settings = Settings.from_env()
     try:
@@ -53,7 +53,7 @@ def investigate(alert: Path = typer.Option(..., "--alert", "-a", exists=True, di
         raise typer.Exit(2)
 
     _print_result(console, result)
-    raise typer.Exit(0 if result.hypotheses else 1)
+    raise typer.Exit(0 if result.report and result.report.status != "failed" else 1)
 
 
 def _print_result(console: Console, result: graph.InvestigationResult) -> None:
@@ -81,6 +81,27 @@ def _print_result(console: Console, result: graph.InvestigationResult) -> None:
         console.print(hyps)
     else:
         console.print("[red]✗ The Diagnostician produced no hypotheses (see failures above and the call log).[/]")
+
+    for v in result.verdicts:
+        color = {"confirmed": "green", "rejected": "red"}.get(v.status, "yellow")
+        console.print(f"[bold]Verifier[/] on {v.hypothesis_id}: [{color}]{v.status}[/] — {escape(v.reasoning)}")
+        for c in v.checks:
+            console.print(f"   {c.evidence_id}: {escape(c.signal)}", highlight=False)
+
+    if result.report:
+        r = result.report
+        color = {"complete": "green", "partial": "yellow"}.get(r.status, "red")
+        console.print()
+        console.rule(f"Incident report [{color}]{r.status}[/]")
+        console.print(f"[bold]Root cause:[/] {escape(r.root_cause_service)} / {r.fault_type}   "
+                      f"[bold]confidence[/] {r.confidence:.2f}"
+                      + (f"   [bold]suspect commit[/] {escape(r.suspect_commit)}" if r.suspect_commit else ""))
+        console.print(escape(r.summary))
+        for action in r.recommended_actions:
+            console.print(f"  → {escape(action)}")
+        for item in r.limitations:
+            console.print(f"  [yellow]limitation:[/] {escape(item)}")
+        console.print(f"Report:   {result.report_paths.get('md_path', result.report_paths)}")
 
     for f in result.failures:
         console.print(f"[yellow]! {f.agent} failed after {f.attempts} attempt(s): {escape(f.error)}[/]")

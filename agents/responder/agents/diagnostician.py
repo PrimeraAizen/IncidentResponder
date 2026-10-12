@@ -1,7 +1,7 @@
 """Diagnostician: combines all evidence into ranked root-cause hypotheses.
 
 Input: the InvestigationPlan (alert + window) and every EvidenceBundle
-(+ the previous Verdict when the Verifier rejected a hypothesis - Phase 3).
+(+ the previous Verdict when the Verifier rejected a hypothesis).
 Output: HypothesisSet (ranked, ≤3). Tools (1): dependency_graph.
 Done when: ≥1 hypothesis that cites evidence ids from the bundles.
 """
@@ -19,7 +19,7 @@ TOOLS = [DEPENDENCY_GRAPH]
 
 
 def run(plan: InvestigationPlan, bundles: list[EvidenceBundle], ctx: RunContext,
-        previous_verdict: Verdict | None = None) -> HypothesisSet | AgentFailure:
+        previous_verdict: Verdict | None = None, rejected: list[str] | None = None) -> HypothesisSet | AgentFailure:
     known_ids = {e.evidence_id for b in bundles for e in b.evidence}
 
     def fix(data: dict) -> dict:
@@ -40,7 +40,7 @@ def run(plan: InvestigationPlan, bundles: list[EvidenceBundle], ctx: RunContext,
                            window_end=plan.window_end, incident_start=plan.alert.started_at)
     ctx.calllog.trace(NAME, f"combining {sum(len(b.evidence) for b in bundles)} evidence item(s) "
                             f"from {len(bundles)} bundle(s)", "dim")
-    result = run_agent(spec, _message(plan, bundles, previous_verdict), ctx, tool_ctx)
+    result = run_agent(spec, _message(plan, bundles, previous_verdict, rejected or []), ctx, tool_ctx)
     if isinstance(result, HypothesisSet):
         top = result.hypotheses[0]
         ctx.calllog.trace(NAME, f"top hypothesis: {top.root_cause_service} / {top.fault_type} "
@@ -48,7 +48,8 @@ def run(plan: InvestigationPlan, bundles: list[EvidenceBundle], ctx: RunContext,
     return result
 
 
-def _message(plan: InvestigationPlan, bundles: list[EvidenceBundle], verdict: Verdict | None) -> str:
+def _message(plan: InvestigationPlan, bundles: list[EvidenceBundle], verdict: Verdict | None,
+             rejected: list[str]) -> str:
     parts = [
         f"Alert: {plan.alert.model_dump_json()}",
         f"Investigation window: {plan.window_start:%Y-%m-%dT%H:%M:%SZ} to {plan.window_end:%Y-%m-%dT%H:%M:%SZ}",
@@ -59,6 +60,6 @@ def _message(plan: InvestigationPlan, bundles: list[EvidenceBundle], verdict: Ve
     if failed:
         parts.append(f"NOTE: these specialists failed or returned partial data: {', '.join(failed)}.")
     if verdict:
-        parts.append(f"The Verifier REJECTED your previous top hypothesis: {verdict.model_dump_json()}. "
-                     "Propose a different explanation or lower your confidence.")
+        parts.append(f"The Verifier REJECTED your previous top hypothesis ({', '.join(rejected)}): "
+                     f"{verdict.model_dump_json()}. Propose a different explanation or lower your confidence.")
     return "\n".join(parts)

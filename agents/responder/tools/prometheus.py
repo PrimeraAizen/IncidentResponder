@@ -133,8 +133,9 @@ def prom_query_range(args: PromRangeArgs, ctx: ToolContext) -> dict:
         cp = change_point(vals)
         if cp:
             k, before, after = cp
-            summary["shift"] = {"at": _iso(points[k][0]), "mean_before": round(before, 4),
-                                "mean_after": round(after, 4)}
+            summary["shift"] = {"at": _iso(points[k][0]),
+                                "at_vs_alert_s": int(points[k][0] - ctx.incident_start.timestamp()),
+                                "mean_before": round(before, 4), "mean_after": round(after, 4)}
         out.append(summary)
     # Most changed series first.
     out.sort(key=lambda s: -abs(s.get("shift", {}).get("mean_after", 0) - s.get("shift", {}).get("mean_before", 0)))

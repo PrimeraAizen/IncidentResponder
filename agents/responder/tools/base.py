@@ -49,6 +49,14 @@ class ToolContext:
     window_start: datetime
     window_end: datetime
     incident_start: datetime  # alert.started_at
+    docker: Any = None        # Docker SDK client; created on first use (tests inject a fake)
+
+    def vs_alert(self, ts: datetime) -> int:
+        """Seconds between `ts` and the alert (negative = before the alert).
+
+        Tools add this next to every timestamp so the LLM never has to do date arithmetic.
+        """
+        return int((ts - self.incident_start).total_seconds())
 
     def window(self, start: datetime | None, end: datetime | None) -> tuple[datetime, datetime]:
         return start or self.window_start, end or self.window_end

@@ -19,12 +19,13 @@ To evaluate it objectively, the repository also contains:
 | [docs/scenarios.md](docs/scenarios.md) | test scenarios: fault, alert, expected root cause, symptom check |
 | [docs/design-decisions.md](docs/design-decisions.md) | why multi-agent, why these roles, trade-offs, limitations |
 
-**Status:** Phase 2 is done.
-- Backend: all 5 services (gateway, order, payment, inventory, notification) with Postgres, Redis and NATS.
-- Harness: deploy simulator, noise deploys, in-process faults; scenarios **s01–s08** are reproducible and each one checks its own symptom.
-- Agents: the Phase 1 prototype, **Log Analyst + Metrics Analyst → Diagnostician**, exchanging structured messages, with every call logged.
+**Status:** Phase 3 is done.
+- All **7 agents** run end to end: Orchestrator → 3 parallel specialists → Diagnostician ⇄ Verifier → Reporter.
+- Investigations are persisted (SQLite state store + LangGraph checkpointer) and end with a Markdown/JSON report.
+- `eval/run_scenario.py` runs scenarios end to end and scores the result against the ground truth.
+- Backend: 5 services with Postgres, Redis and NATS. Harness: scenarios **s01–s08**, each with its own symptom check.
 
-The remaining agents (Orchestrator, Change Investigator, Verifier, Reporter) arrive in Phase 3. See SPEC.md section 12.
+Phase 4 adds the time limit, s09–s12 and the full evaluation (SPEC.md section 12).
 
 ---
 
@@ -86,7 +87,13 @@ make reset                                # back to the healthy baseline
    diagnostician → top hypothesis: payment / latency (confidence 0.80)
 ```
 
-It then prints two tables: the evidence from each specialist and the ranked root-cause hypotheses. Expected result for s01: **root cause `payment`, fault type `latency`**. The alert only says that the *gateway* is slow.
+It then prints:
+- the evidence from each specialist;
+- the ranked root-cause hypotheses;
+- the Verifier's verdict with the checks it ran;
+- the final incident report: root cause, confidence, summary, recommended actions, and the path of `reports/<incident_id>.md`.
+
+Expected result for s01: **root cause `payment`, fault type `latency`**. The alert only says that the *gateway* is slow.
 
 Scenarios s01–s08 are described in [docs/scenarios.md](docs/scenarios.md). The harness CLI (`uv run --project agents python -m chaos …`):
 
@@ -107,7 +114,10 @@ Scenarios s01–s08 are described in [docs/scenarios.md](docs/scenarios.md). The
 | Committed sample run (for grading) | `logs/sample/` |
 | Generated alerts | `alerts/` |
 | Deploy log (what the Change Investigator will read) | `data/deploy_events.jsonl`, git history of `target-repo/` |
-| Incident reports (Phase 3) | `reports/` |
+| Incident reports (Markdown + JSON) | `reports/<incident_id>.md` / `.json` |
+| Task state of every investigation (plan, evidence, hypotheses, verdicts, report) | `data/incidents.db` (SQLite) |
+| LangGraph checkpoints (graph state after each step) | `data/checkpoints.db` |
+| Evaluation runs | `eval/results/<timestamp>/` |
 
 The CLI also prints each agent's share of all calls. The requirement is that no agent exceeds 40%.
 
@@ -125,7 +135,16 @@ The graph tests run the real tool code against a mocked Prometheus/Loki API with
 
 ## Evaluation
 
-`make eval` runs every scenario several times and scores the results against the ground truth. It arrives in Phase 4 (`eval/run_all.py`, `eval/load_report.py`).
+```bash
+make eval-scenario S="s01 s02 s03" REPEATS=1   # = uv run --project agents python eval/run_scenario.py s01 s02 s03
+```
+
+For each scenario and repeat this runs the whole chain:
+1. reset, noise deploys, warm-up, fault, alert;
+2. all 7 agents investigate;
+3. the result is scored against the scenario's ground truth.
+
+Each run is saved to `eval/results/<timestamp>/<scenario>_<n>.json`, a summary table is printed, and the system is reset at the end. A run is correct when the reported root-cause service and fault type match the scenario (SPEC §8). For deploy scenarios the suspect commit is scored too. `make eval` (all scenarios × 3, with the results table in `docs/results.md`) arrives in Phase 4.
 
 ## All make targets
 
@@ -166,6 +185,7 @@ docs/            architecture, agents, messages, design decisions
 | `target-repo/ is missing` | Run `make target-init` once. |
 | `LLM_API_KEY is not set` | `cp .env.example .env` and fill in the LLM section, or use `LLM_PROVIDER=fake`. |
 | `429 … exceeded your current quota` | Set `LLM_MAX_RPM` to your plan's per-minute limit (Gemini free tier: 5). If the *daily* quota is used up, switch `LLM_MODEL`: quotas are per model. |
+| `Connection error` / `Connection reset by peer` for every LLM call | Your network blocks the provider's API (check `curl -I https://generativelanguage.googleapis.com`). Switch network or VPN, or use a provider you can reach (e.g. OpenRouter). The run still ends with a `failed` report: that is the degradation path working. |
 | `503 … model is currently experiencing high demand` | The provider is overloaded (temporary). Retry later, or use another model, e.g. `LLM_MODEL=gemini-3.5-flash make investigate ALERT=…`. |
 | `400 … missing a thought_signature` | Fixed: the runtime sends Gemini's assistant messages back unchanged. If you see it, you are on an old checkout. |
 | A symptom check prints ✗ | The fault did not fully develop (e.g. Docker was very slow). Run the scenario again; `make reset` first if anything looks stuck. |

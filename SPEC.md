@@ -491,11 +491,12 @@ Dates assume today = 6 Oct 2026. Update checkboxes as you go.
   - ✅ Verified on 12 Oct: all 8 symptom checks pass (values in `docs/results.md`); after `make reset` all containers are healthy, target-repo is at `baseline`, the deploy log is empty and only the baseline toxics remain.
 
 ### Phase 3 — All agents end-to-end (19–25 Oct)
-- [ ] Orchestrator, Change Investigator, Verifier (with loop), Reporter
-- [ ] All tools per section 6.4; anti-leakage + ≤5-tools tests
-- [ ] SQLite state store + checkpointer
-- [ ] `run_scenario.py` end-to-end with scoring
+- [x] Orchestrator, Change Investigator, Verifier (with loop), Reporter
+- [x] All tools per section 6.4; anti-leakage + ≤5-tools tests
+- [x] SQLite state store + checkpointer
+- [x] `run_scenario.py` end-to-end with scoring
 - **Accept:** full graph runs on s01–s06; ≥4 correct.
+  - ⏳ Pending a reachable LLM endpoint. On 12 Oct the network reset every connection to the Gemini and OpenAI APIs. The full graph has been verified with the fake LLM against the live stack (all 7 agents, real tools).
 
 ### Phase 4 — Reliability & quality (26 Oct – 1 Nov)
 - [ ] Limits, retries, repair-call, degradation paths, timeout → partial report

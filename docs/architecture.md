@@ -43,7 +43,7 @@ flowchart LR
 
 Solid arrows are structured messages (Pydantic models serialized as JSON; see [messages.md](messages.md)). Dotted arrows are tool calls to external data sources.
 
-**Pattern:** orchestrator, then parallel specialists, then a verification loop (hierarchical, with a pipeline tail).
+**Pattern:** orchestrator, then parallel specialists, then a verification loop (hierarchical, with a pipeline tail). All seven agents are implemented.
 
 1. **Orchestrator** turns the alert into an `InvestigationPlan`: a time window, focus services, and one `Task` per specialist. It only plans: 1 LLM call, 0 tools.
 2. **Three specialists run in parallel**, each with its own data source and at most 4 tools. Each returns an `EvidenceBundle`.
@@ -55,22 +55,30 @@ Solid arrows are structured messages (Pydantic models serialized as JSON; see [m
 
 **Agent roles, inputs, outputs and tools:** [agents.md](agents.md).
 
-### Phase 1 prototype (implemented)
+### How the graph is wired (`agents/responder/graph.py`)
 
 ```mermaid
 flowchart LR
-    A[Alert JSON] --> P[plan<br/>deterministic planner<br/>stand-in for Orchestrator]
-    P --> L[Log Analyst]
-    P --> M[Metrics Analyst]
-    L -- EvidenceBundle --> D[Diagnostician]
-    M -- EvidenceBundle --> D
-    D -- HypothesisSet --> OUT[CLI tables +<br/>logs/run_ID_result.json]
-    L -.-> LOKI[(Loki)]
-    M -.-> PROM[(Prometheus)]
-    D -.-> TOPO[(topology.yaml)]
+    S((START)) --> O[orchestrator]
+    O --> L[log_analyst] & M[metrics_analyst] & C[change_investigator]
+    L & M & C --> D[diagnostician]
+    D -- "top hypothesis not yet rejected" --> V[verifier]
+    D -- "no hypothesis, or a rejected one re-proposed" --> R[reporter]
+    V -- "rejected and loops < MAX_VERIFY_LOOPS" --> D
+    V -- "confirmed / inconclusive / loop limit / verifier failed" --> R
+    R --> E((END))
 ```
 
-`graph.py` wires exactly this. The two specialists are LangGraph nodes reached from the same node, so they run in parallel. `add_edge([log_analyst, metrics_analyst], diagnostician)` makes the Diagnostician wait for both. Every LLM call and tool call is written to `logs/run_<id>.jsonl`.
+- **Parallel specialists.** The three specialists are reached from the same node, so LangGraph runs them in parallel. `add_edge([log, metrics, change], diagnostician)` makes the Diagnostician wait for all three.
+- **Routing.** Both conditional edges are small Python functions (`after_diagnostician`, `after_verifier`) that read the state.
+- **Loop protection.** The key of a hypothesis is `root_cause_service/fault_type`. If the Diagnostician re-proposes a key the Verifier already rejected, the loop ends.
+- **Final decision.** The final root cause, confidence and status are set by a pure function (`reporter.final_decision`):
+  - the confidence goes up if the hypothesis was confirmed, down if it was inconclusive, rejected or never verified;
+  - each failed specialist lowers it further and makes the report `partial`.
+- **State.** `GraphState` is a typed dict:
+  - `plan`, `bundles`, `hypotheses` (the latest), `verdicts`, `rejected`, `verify_loops`, `report`, `failures`;
+  - every node also saves its output to `data/incidents.db` (`state_store.py`);
+  - LangGraph's `SqliteSaver` checkpoints the graph state to `data/checkpoints.db` after every step.
 
 ---
 

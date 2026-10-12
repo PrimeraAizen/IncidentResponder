@@ -14,6 +14,10 @@ logs/*
 # Generated alerts from `make scenario`
 alerts/*.json
 
+# Generated incident reports - only reports/sample/ is committed
+reports/*
+!reports/sample/
+
 # Eval raw results (summaries go to docs/results.md)
 eval/results/
 

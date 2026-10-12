@@ -23,7 +23,7 @@ def load_prompt(agent_name: str) -> str:
 
 def tool_context(run: RunContext, task: Task, alert: Alert) -> ToolContext:
     return ToolContext(settings=run.settings, http=run.http, window_start=task.window_start,
-                       window_end=task.window_end, incident_start=alert.started_at)
+                       window_end=task.window_end, incident_start=alert.started_at, docker=run.docker)
 
 
 def task_message(task: Task, alert: Alert) -> str:

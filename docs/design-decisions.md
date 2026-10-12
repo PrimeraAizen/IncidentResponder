@@ -139,9 +139,41 @@ Following the rule "choose the simplest reasonable option and note it":
 33. **Deploys do not wait for the new version to become healthy.** A broken release may never become healthy (s06: `/healthz` pings Postgres through the exhausted pool), and a pipeline without health gating would not wait either. Resets do wait for health.
 34. **s06 runs under a lunch-time order rush** (`load: {rps: 40, mix: "create=70,get=30"}`). With the normal mix (30% orders), even 2 connections are only ~40% busy. Pool exhaustion needs demand above capacity, which is also what happens in production.
 
-## 7. Known limitations
+## 7. Choices made in Phase 3 (all agents end-to-end)
 
-- Until Phase 3 there is no Change Investigator, Verifier or Reporter. Deploys are recorded (git + deploy log), but no agent reads them yet, so bad deploys and misconfigurations (s04, s06, s08) cannot be fully diagnosed.
+35. **The Orchestrator decides only planning choices:** how far back to look (`lookback_minutes`, clamped to 5–30), which services to focus on, and a tailored objective per specialist.
+    - Code fills in the incident id, exact timestamps, task ids and the fixed list of three specialists.
+    - LLMs are bad at date arithmetic, and a plan must never omit a specialist.
+    - If its call fails, the deterministic planner's plan is used, so a run never stops at step 1.
+36. **Routing rules are code** (`after_diagnostician`, `after_verifier` in `graph.py`):
+    - A rejected hypothesis goes back to the Diagnostician (with the Verifier's reasoning) while `verify_loops < MAX_VERIFY_LOOPS`.
+    - **Loop protection:** a hypothesis whose key `root_cause_service/fault_type` was already rejected is not verified again; the Reporter takes over.
+    - A Diagnostician failure goes straight to the Reporter.
+37. **The Verifier does not see the specialists' evidence.** It gets only the hypothesis (service, fault type, explanation) and the alert, designs its own falsification checks and runs fresh queries; its window ends "now". This is the separation of hypothesis generation from testing (§1). Its prompt warns that a root cause can still answer `/healthz` quickly, because health checks do not exercise the broken path.
+38. **The final result is decided by a pure function** (`reporter.final_decision`, unit-tested), not by an LLM. The result is the Diagnostician's latest top hypothesis, with its confidence adjusted:
+
+    | Outcome | Confidence | Report status |
+    |---|---|---|
+    | confirmed | +0.1 | complete |
+    | inconclusive | ×0.8 | complete |
+    | not verified | ×0.8 | partial |
+    | rejected (loop ended) | ×0.5 | partial |
+    | each failed specialist | ×0.8 | partial |
+
+    The limitations list says why.
+39. **The Reporter only writes.** Code fills root cause, fault type, confidence, status and suspect commit; the LLM writes summary, timeline, actions and evidence references.
+    - `write_report` is run by the Reporter's code after validation; the Markdown is rendered from the validated object.
+    - If the LLM fails, a plain template report is written, so every run ends with a report.
+    - A run without any hypothesis gets `root_cause_service: "unknown"` and `fault_type: "no_fault"`: `fault_type` is a fixed enum, and the status `failed` marks it.
+40. **Times relative to the alert.** Every tool that returns a timestamp also returns `vs_alert_s` (seconds relative to the alert, negative = before). Examples: deploys, commits, container start/stop, log pattern first/last seen, metric level shifts. "This deploy was 35 s before the alert, that one 2.5 min before" is exactly what separates a guilty change from noise, and LLMs compute it unreliably.
+41. **`docker_inspect` sees only the system's components** and refuses `toxiproxy` and `loadgen`. With no argument it returns all components in one call (budget: 4 tool calls). The Docker socket is found via `DOCKER_HOST`, `/var/run/docker.sock` or Docker Desktop's `~/.docker/run/docker.sock`.
+42. **`health_check` of an infrastructure component** (postgres, redis, nats) returns the `/healthz` checks of the services that depend on it. These components have no HTTP endpoint, and this is how an engineer would check them.
+43. **Git access is read-only by construction:** only `git log` and `git show` run; the commit must match `^[0-9a-f]{4,40}$`, and paths must be relative without `..`.
+44. **Two persistence layers.** `data/incidents.db` (our StateStore) has one row per plan, bundle, hypothesis set, verdict and report, as readable JSON for audits and the report. `data/checkpoints.db` is LangGraph's `SqliteSaver`, which checkpoints the graph state after every step (`thread_id` = incident id) for resume and debugging.
+45. **`eval/run_scenario.py` accepts several scenario ids** (`s01 s02 …`) and `--repeats`. It writes one JSON per run (`eval/results/<ts>/<scenario>_<n>.json`) with the score, verdicts, call and token counts, and resets the system at the end even if a run crashes.
+
+## 8. Known limitations
+
 - The plan window (15 min before the alert) can still contain the tail of a previous scenario when scenarios run back-to-back. The specialists are told to mark patterns that started long before the alert. Phase 3/4 (the Orchestrator's window, eval cooldowns) will revisit this.
 - Loki's `label/values` endpoint can lag a minute behind fresh streams. The Log Analyst uses `error_pattern_summary` / `loki_query` first, and those are not affected.
 - A scenario run takes ~4.5 min (reset + noise deploys + 120 s warm-up + 90 s observation). That makes the spec's "< 90 min for 12 × 3 runs" target unreachable without shortening the warm-up or observation; revisited in Phase 4.
