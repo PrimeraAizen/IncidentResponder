@@ -1,0 +1,23 @@
+id: s10_inventory_goroutine_leak
+description: Inventory leaks goroutines (200/s) that keep waking up; its CPU saturates and responses slow down.
+setup:
+  - chaos: {service: inventory, leak_goroutines: true}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighLatency
+  service: gateway
+  severity: critical
+  summary: "p95 latency of GET /api/products far above normal"
+expected:
+  root_cause_service: inventory
+  fault_type: goroutine_leak
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: inventory goroutines
+    promql: max(go_goroutines{service="inventory"})
+    above: 5000
+  - description: gateway GET /api/products p95 latency (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="gateway",route="/api/products"}[1m])))
+    above: 0.05

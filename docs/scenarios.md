@@ -18,10 +18,10 @@ Each scenario is a YAML file in [`scenarios/`](../scenarios). It contains:
 | s06 | deploy-sim: order `config.yaml` sets DB pool `max_conns: 2`, during an order rush (40 rps, 70% orders) | gateway `HighLatency`: "p95 > 1s, some requests time out" | **order / resource_exhaustion** + the config commit | gateway `/api/orders` p95 > 1 s **and** order pool wait p95 > 0.2 s | ✅ |
 | s07 | `docker stop nats` | order `EventPublishErrors` | **nats / dependency_down** (orders still succeed) | failed publishes > 0.5/s **and** gateway 5xx ratio < 0.05 | ✅ |
 | s08 | deploy-sim: gateway `config.yaml` points payment at a wrong port | gateway `HighErrorRate` (502) | **gateway / misconfiguration** + the config commit (must not blame payment) | gateway 5xx ratio > 0.1 | ✅ |
-| s09 | deploy-sim: migration drops the index on `orders` | order `HighLatency` | **postgres / slow_query** (accepted: order) | | Phase 4 |
-| s10 | `/admin/chaos leak_goroutines` on inventory | gateway `HighLatency` | **inventory / goroutine_leak** | | Phase 4 |
-| s11 | Toxiproxy timeouts on payment; gateway retries ×3 → retry storm | gateway `HighErrorRate` + high RPS | **payment / latency** (must not blame gateway) | | Phase 4 |
-| s12 | load spike ×5, no fault | gateway `HighLatency` (mild) | **none / no_fault** | | Phase 4 |
+| s09 | deploy-sim: an order migration drops the index of the fraud check; 3M orders, busy period (30 rps, 70% orders) | order `HighLatency` | **postgres / slow_query** (accepted: order) + the migration's commit | order `recent_orders` query p95 > 30 ms **and** order `/orders` p95 > 0.2 s | ✅ |
+| s10 | `/admin/chaos leak_goroutines` on inventory (200/s; each wakes every 20 ms; inventory limited to 1 CPU) | gateway `HighLatency` on `GET /api/products` | **inventory / goroutine_leak** | inventory goroutines > 5000 **and** gateway `/api/products` p95 > 50 ms | ✅ |
+| s11 | Toxiproxy +5 s on gateway→payment: every attempt hits the gateway's 3 s timeout, and 3 retries make a retry storm | gateway `HighErrorRate` + "outgoing request rate far above normal" | **payment / latency** (must not blame gateway) | gateway 5xx ratio > 0.1 **and** > 2 payment calls per order | ✅ |
+| s12 | load spike ×5 (+40 rps), no fault | gateway `HighLatency` (warning) | **none / no_fault** | gateway > 35 rps **and** gateway 5xx ratio < 0.02 | ✅ |
 
 **Scoring** (SPEC §8): a run is correct iff all three hold:
 - `root_cause_service` ∈ {expected} ∪ `accepted_services`;
@@ -59,7 +59,8 @@ Then `make investigate ALERT=alerts/sNN.json` and, afterwards, `make reset`.
 | `docker` | `{stop: postgres}` | `docker compose stop` |
 | `chaos` | `{service: notification, leak_memory: true}` | `POST /admin/chaos` on the service's internal port 9000, via `docker compose exec` |
 | `deploy` | `{service: order, patch: s04_order_promotions.patch}` | deploy simulator: `git apply` → VERSION bump → commit (realistic author) → rebuild → deploy event |
+| `load_spike` | `{extra_rps: 40, duration_s: 300}` | an extra load generator starting at injection time |
 
 ## Validation (Phase 2)
 
-All of s01–s08 were run on 12 Oct 2026 and every symptom check passed. s05 and s06 passed after two harness fixes, described in [results.md](results.md#phase-2-scenario-validation), which also has the measured values. `make reset` returned the system to healthy after each run.
+All of s01–s08 were run on 12 Oct 2026 and s09–s12 on 17 Oct 2026; every symptom check passed. s05 and s06 passed after two harness fixes, described in [results.md](results.md#phase-2-scenario-validation), which also has the measured values. `make reset` returned the system to healthy after each run.

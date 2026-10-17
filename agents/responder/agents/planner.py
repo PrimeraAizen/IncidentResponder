@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from responder.schemas import Alert, InvestigationPlan, Task
 from responder.tools.topology import downstream_of
 
-DEFAULT_LOOKBACK_MIN = 10
+DEFAULT_LOOKBACK_MIN = 5  # alerts fire ~1 min after onset; the Orchestrator may choose more
 
 # The three specialists and the default objective of each (formatted with the alert).
 SPECIALIST_OBJECTIVES = {

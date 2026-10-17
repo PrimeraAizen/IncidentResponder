@@ -496,14 +496,15 @@ Dates assume today = 6 Oct 2026. Update checkboxes as you go.
 - [x] SQLite state store + checkpointer
 - [x] `run_scenario.py` end-to-end with scoring
 - **Accept:** full graph runs on s01–s06; ≥4 correct.
-  - ⏳ Pending a reachable LLM endpoint. On 12 Oct the network reset every connection to the Gemini and OpenAI APIs. The full graph has been verified with the fake LLM against the live stack (all 7 agents, real tools).
+  - ✅ Verified on 17 Oct (`gemini-3.1-flash-lite`, Phase 4 tuning pass 1): s01–s06 **6/6 correct**, including the deploy commits of s04 and s06 (`docs/results.md`, "Tuning history").
 
 ### Phase 4 — Reliability & quality (26 Oct – 1 Nov)
-- [ ] Limits, retries, repair-call, degradation paths, timeout → partial report
-- [ ] Scenarios s09–s12
-- [ ] `run_all.py`, `load_report.py`, `docs/results.md`
-- [ ] Prompt/tool tuning to reach ≥90% overall over 3 repeats
+- [x] Limits, retries, repair-call, degradation paths, timeout → partial report
+- [x] Scenarios s09–s12
+- [x] `run_all.py`, `load_report.py`, `docs/results.md`
+- [x] Prompt/tool tuning to reach ≥90% overall over 3 repeats — 3 tuning passes (history in `docs/results.md`); every scenario diagnosed correctly with the final prompts
 - **Accept:** `make eval` ≥ 10/12 scenarios correct (majority of repeats); every agent ≤40% of calls on a typical run.
+  - ⏳ Full evaluation in progress. On 17 Oct the first 9 runs (s01–s09, repeat 1) were all correct; then the free tier's daily quota (500 requests) ran out. The remaining 27 runs resume with `--resume eval/results/20261017T131212Z`. Load distribution of a typical run: largest share 25% ✅.
 
 ### Phase 5 — Assignment 4 submission (2–8 Nov)
 - [ ] Final full eval run; commit `logs/sample/` + results

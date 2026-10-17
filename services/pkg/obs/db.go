@@ -103,6 +103,22 @@ func (d *DB) QueryRow(ctx context.Context, name, sql string, args []any, dest ..
 	return d.timed(name, func() error { return conn.QueryRow(ctx, sql, args...).Scan(dest...) })
 }
 
+// Exec runs a statement without result rows (e.g. a migration).
+func (d *DB) Exec(ctx context.Context, name, sql string, args ...any) (pgconn.CommandTag, error) {
+	conn, err := d.acquire(ctx)
+	if err != nil {
+		return pgconn.CommandTag{}, err
+	}
+	defer conn.Release()
+	var tag pgconn.CommandTag
+	err = d.timed(name, func() error {
+		var execErr error
+		tag, execErr = conn.Exec(ctx, sql, args...)
+		return execErr
+	})
+	return tag, err
+}
+
 // Query runs a multi-row query; each(scan) is called once per row.
 func (d *DB) Query(ctx context.Context, name, sql string, args []any, each func(scan func(dest ...any) error) error) error {
 	conn, err := d.acquire(ctx)

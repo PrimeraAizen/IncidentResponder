@@ -10,6 +10,7 @@ Done when: a verdict with ≥1 check.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from responder.agents.common import load_prompt, tool_context
@@ -43,9 +44,18 @@ def run(hypothesis: Hypothesis, plan: InvestigationPlan, ctx: RunContext) -> Ver
     return result
 
 
+def baseline_offset_minutes(alert_started_at: datetime, now: datetime) -> int:
+    """A PromQL `offset` that points safely before the incident: minutes since the alert, plus 2."""
+    return math.ceil((now - alert_started_at).total_seconds() / 60) + 2
+
+
 def _message(hypothesis: Hypothesis, plan: InvestigationPlan) -> str:
     claim = hypothesis.model_dump(include={"root_cause_service", "fault_type", "explanation", "suspect_commit"})
+    now = datetime.now(timezone.utc)
+    offset = baseline_offset_minutes(plan.alert.started_at, now)
     return (f"Hypothesis to test:\n{claim}\n\n"
             f"Alert:\n{plan.alert.model_dump_json()}\n\n"
-            f"The alert fired at {plan.alert.started_at:%Y-%m-%dT%H:%M:%SZ}; it is now "
-            f"{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}. Components in scope: {', '.join(plan.focus_services)}.")
+            f"The alert fired at {plan.alert.started_at:%Y-%m-%dT%H:%M:%SZ}; it is now {now:%Y-%m-%dT%H:%M:%SZ}. "
+            f"Components in scope: {', '.join(plan.focus_services)}.\n"
+            f"Baseline for comparisons: `offset {offset}m` points to a moment BEFORE the incident, "
+            f"e.g. `X / (X offset {offset}m)` or the same query with `[1m] offset {offset}m`.")

@@ -55,8 +55,12 @@ def reset_all(say: Say) -> None:
 
 
 def run_until_alert(scn: Scenario, say: Say, wait: Wait, warmup: int | None = None, observe: int | None = None,
-                    noise: bool = True) -> ScenarioRun:
+                    noise: bool = True, cooldown_s: int = 0) -> ScenarioRun:
+    """cooldown_s: extra quiet time after the reset (evaluation runs back to back), so the previous
+    scenario's errors are older than the next investigation's look-back window."""
     reset_all(say)
+    if cooldown_s:
+        wait("cooldown: the previous scenario's traces age out of the look-back window", cooldown_s)
     noise_events = deploy_sim.deploy_noise(scn.noise_services()) if noise else []
     for e in noise_events:
         say(f"✓ noise deploy {e['service']} {e['version']} ({e['commit']}): {e['message']}")

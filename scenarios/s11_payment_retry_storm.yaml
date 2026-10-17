@@ -1,0 +1,23 @@
+id: s11_payment_retry_storm
+description: Payment responses take 5 s; the gateway times out after 3 s and retries 3 times, multiplying the load on payment.
+setup:
+  - toxic: {proxy: gateway_payment, type: latency, latency_ms: 5000}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighErrorRate
+  service: gateway
+  severity: critical
+  summary: "5xx ratio of gateway requests > 5%; outgoing request rate far above normal"
+expected:
+  root_cause_service: payment
+  fault_type: latency
+  accepted_services: []
+  must_not_blame: [gateway]
+symptom:
+  - description: gateway 5xx ratio
+    promql: 'sum(rate(http_requests_total{service="gateway",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="gateway"}[1m]))'
+    above: 0.1
+  - description: calls to payment per order (retry storm)
+    promql: sum(rate(upstream_requests_total{service="gateway",target="payment"}[1m])) / sum(rate(http_requests_total{service="gateway",route="/api/orders"}[1m]))
+    above: 2

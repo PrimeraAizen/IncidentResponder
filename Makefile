@@ -38,11 +38,11 @@ investigate: ## run the agents on an alert: make investigate ALERT=alerts/s01.js
 eval-scenario: ## evaluate the agents end to end: make eval-scenario S="s01 s02" REPEATS=1
 	$(UV) python eval/run_scenario.py $(S) --repeats $(REPEATS)
 
-eval: ## run all scenarios and score them (Phase 4)
-	@echo "eval/run_all.py arrives in Phase 4"; exit 1
+eval: ## all scenarios x 3 repeats, results into docs/results.md: make eval [EVAL_REPEATS=3]
+	$(UV) python eval/run_all.py --repeats $(or $(EVAL_REPEATS),3)
 
-load-report: ## per-agent share of calls: make load-report RUN=logs/run_xxx.jsonl (Phase 4)
-	@echo "eval/load_report.py arrives in Phase 4"; exit 1
+load-report: ## per-agent share of calls of one run: make load-report RUN=logs/run_xxx.jsonl
+	$(UV) python eval/load_report.py $(RUN)
 
 test: ## unit tests (pytest + go test)
 	$(UV) pytest -q

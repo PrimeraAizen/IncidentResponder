@@ -9,6 +9,7 @@ Setup step types:
     - docker: {stop: postgres}
     - chaos:  {service: notification, leak_memory: true}
     - deploy: {service: order, patch: s04_order_promotions.patch}
+    - load_spike: {extra_rps: 40, duration_s: 300}
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pydantic import BaseModel, Field
 from chaos import deploy_sim, faults
 
 SCENARIOS_DIR = faults.ROOT / "scenarios"
-STEP_TYPES = {"toxic", "docker", "chaos", "deploy"}
+STEP_TYPES = {"toxic", "docker", "chaos", "deploy", "load_spike"}
 # Real alerts fire some time after the fault starts (rule `for:` clause).
 ALERT_DELAY = timedelta(seconds=30)
 
@@ -100,6 +101,9 @@ def apply_setup(scn: Scenario) -> list[StepResult]:
             event = deploy_sim.deploy(spec["service"], spec["patch"])
             done.append(StepResult(f"deploy {event['service']} {event['version']} ({event['commit']}): "
                                    f"{event['message']}", deploy_event=event))
+        elif kind == "load_spike":
+            faults.start_extra_load(spec["extra_rps"], spec["duration_s"])
+            done.append(StepResult(f"load spike: +{spec['extra_rps']} rps for {spec['duration_s']} s"))
         else:
             raise ValueError(f"unknown setup step {kind!r} (known: {sorted(STEP_TYPES)})")
     return done

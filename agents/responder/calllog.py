@@ -38,13 +38,14 @@ class CallLogger:
     # ------------------------------------------------------------------ logging
     def log(self, *, agent: str, call_type: str, name: str, latency_ms: int, status: str,
             attempt: int = 1, tokens_in: int | None = None, tokens_out: int | None = None,
-            error: str | None = None) -> None:
+            error: str | None = None, args: str | None = None) -> None:
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "run_id": self.run_id, "incident_id": self.incident_id,
             "agent": agent, "call_type": call_type, "name": name,
             "latency_ms": latency_ms, "status": status, "attempt": attempt,
             "tokens_in": tokens_in, "tokens_out": tokens_out, "error": error,
+            "args": args,  # tool calls: the (shortened) arguments, so a run can be audited afterwards
         }
         with self._lock, self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
@@ -59,7 +60,7 @@ class CallLogger:
              is_retryable: Callable[[BaseException], bool], attempts: int = 3,
              usage: Callable[[T], tuple[int | None, int | None]] | None = None,
              wait: Callable[[RetryCallState], float] | None = None,
-             before_attempt: Callable[[], None] | None = None) -> T:
+             before_attempt: Callable[[], None] | None = None, args: str | None = None) -> T:
         """Run fn() with retries; log every attempt.
 
         Each attempt produces one log line with status ok / retry / error.
@@ -82,11 +83,11 @@ class CallLogger:
                 will_retry = is_retryable(exc) and attempt_no < attempts
                 self.log(agent=agent, call_type=call_type, name=name,
                          latency_ms=_ms_since(start), status="retry" if will_retry else "error",
-                         attempt=attempt_no, error=_short(exc))
+                         attempt=attempt_no, error=_short(exc), args=args)
                 raise
             tokens_in, tokens_out = usage(result) if usage else (None, None)
             self.log(agent=agent, call_type=call_type, name=name, latency_ms=_ms_since(start),
-                     status="ok", attempt=attempt_no, tokens_in=tokens_in, tokens_out=tokens_out)
+                     status="ok", attempt=attempt_no, tokens_in=tokens_in, tokens_out=tokens_out, args=args)
             return result
 
         retrying = Retrying(

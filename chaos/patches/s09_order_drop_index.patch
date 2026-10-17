@@ -1,0 +1,11 @@
+Subject: order: drop unused orders(customer_id, created_at) index to speed up inserts
+Author: Nurlan Abenov <nurlan.abenov@shop.example>
+
+diff --git a/order/migrations/002_drop_unused_orders_index.sql b/order/migrations/002_drop_unused_orders_index.sql
+new file mode 100644
+index 0000000..81963d9
+--- /dev/null
++++ b/order/migrations/002_drop_unused_orders_index.sql
+@@ -0,0 +1,2 @@
++-- The (customer_id, created_at) index is big and slows down inserts; reports do not use it.
++DROP INDEX IF EXISTS orders_customer_created_idx;

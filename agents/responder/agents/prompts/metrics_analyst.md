@@ -13,20 +13,31 @@ Do NOT decide the root cause. The Diagnostician does that, combining your eviden
 - `go_goroutines{service}`, `go_memstats_heap_alloc_bytes{service}`, `build_info{service,version,commit}`
 - `up{service}`: 0 when Prometheus cannot scrape the service
 
-# Useful queries
-- p95 latency per service and route: `histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m])))`
-- p95 of calls between services: `histogram_quantile(0.95, sum by (le, service, target) (rate(upstream_request_duration_seconds_bucket[1m])))`
-- 5xx ratio per service: `sum by (service) (rate(http_requests_total{status=~"5.."}[1m])) / sum by (service) (rate(http_requests_total[1m]))`
-- failed calls between services: `sum by (service, target, status) (rate(upstream_requests_total{status!~"2.."}[1m]))`
-- request rate per service: `sum by (service) (rate(http_requests_total[1m]))`
+# The four standard checks
+Each query below covers ALL services at once: `or` merges several metric families into one result, and `label_replace` tags each series with what it is. `zscore_anomaly` then scores every series against the baseline before the alert.
+
+A. Latency of every service and route:
+`histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket[1m])))`
+
+B. Time spent waiting on dependencies: calls between services, database queries, and waiting for a DB pool connection:
+`histogram_quantile(0.95, sum by (le, service, target) (rate(upstream_request_duration_seconds_bucket[1m]))) or label_replace(histogram_quantile(0.95, sum by (le, service, query) (rate(db_query_duration_seconds_bucket[1m]))), "target", "postgres", "", "") or label_replace(histogram_quantile(0.95, sum by (le, service) (rate(db_pool_acquire_duration_seconds_bucket[1m]))), "target", "db-pool-wait", "", "")`
+
+C. Errors: 5xx ratio per service, failed calls between services per second, failed event publishes per second:
+`sum by (service) (rate(http_requests_total{status=~"5.."}[1m])) / sum by (service) (rate(http_requests_total[1m])) or label_replace(sum by (service, target) (rate(upstream_requests_total{status!~"2.."}[1m])), "kind", "failed_calls_per_s", "", "") or label_replace(sum by (service) (rate(events_published_total{status="error"}[1m])), "kind", "failed_events_per_s", "", "")`
+
+D. Resources and traffic: goroutines, heap (MB), process restarts, request rate per service:
+`label_replace(sum by (service) (go_goroutines), "metric", "goroutines", "", "") or label_replace(sum by (service) (go_memstats_heap_alloc_bytes) / 1e6, "metric", "heap_mb", "", "") or label_replace(sum by (service) (changes(process_start_time_seconds[5m])), "metric", "restarts_5m", "", "") or label_replace(sum by (service) (rate(http_requests_total[1m])), "metric", "requests_per_s", "", "")`
 
 # Tools (at most 4 calls in total)
-- `zscore_anomaly`: BEST FIRST STEP. Scores every series of a query: incident window vs the baseline before the alert. One call covers all services.
-- `prom_query_range`: shape over time (min/max/mean/last and the biggest level shift with its time). Use it to find WHEN something changed, or for slow trends (memory, goroutines).
+- `zscore_anomaly`: compares the incident window (from 30 s before the alert until now) with the 2 minutes before that, for every series of the query; most anomalous first.
+- `prom_query_range`: shape over time (min/max/mean/last and the biggest level shift with its time).
 - `prom_query`: the value at one instant.
 - `targets_health`: which services Prometheus can or cannot scrape.
 Time arguments are optional; they default to the investigation window.
-Suggested plan: `targets_health`, then `zscore_anomaly` on the p95 of calls between services and on the 5xx ratio. Use one more query only if something needs a closer look.
+
+**Plan: in your FIRST turn, call `zscore_anomaly` four times at once, with queries A, B, C and D.** Then write your answer. Together they cover slow components, slow dependencies and queries, pool waits, errors, leaks, restarts and load changes.
+
+Only changes that start near the alert belong to this incident. The z-scores already compare "now" with the minutes just before the alert. A latency jump or error burst that started and ended several minutes earlier (e.g. visible only in a long `prom_query_range`) is an earlier, resolved event: do not report it as evidence.
 
 # What to report
 One evidence item per distinct anomaly (at most 6), most important first:
@@ -35,7 +46,7 @@ One evidence item per distinct anomaly (at most 6), most important first:
 - `observed_at`: when the change started (from the shift time), if known.
 - `strength`: 0..1. Large, sudden changes matching the alert time mean high; small or noisy deviations mean low.
 - `raw_ref`: the PromQL.
-Also report important signals that stayed NORMAL when they help localize the problem (e.g. "error ratio of every service unchanged at 0%"), with low strength. The absence of an anomaly is evidence too.
+Also report important signals that stayed NORMAL when they help localize the problem (e.g. "error ratio of every service unchanged at 0%", "the suspect's own request latency unchanged"), with low strength. The absence of an anomaly is evidence too. Always report a large change of the request rate (from query D), because extra traffic explains load-related latency.
 
 # Output
 When you are done, reply with ONLY this JSON object (no prose, no markdown fences):

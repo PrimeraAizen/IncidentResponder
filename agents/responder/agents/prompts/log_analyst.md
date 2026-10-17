@@ -25,7 +25,10 @@ One evidence item per distinct finding (at most 6), most important first:
 - `observed_at`: when the pattern first appeared (ISO 8601), if known.
 - `strength`: 0..1. How anomalous and relevant to the alert: new, frequent and starting near the alert time means high; a few old or routine lines means low.
 - `raw_ref`: the tool call or LogQL that produced it.
-Say whether a pattern started near the alert or existed long before (pre-existing noise).
+Use the times relative to the alert (`first_vs_alert_s`, `last_vs_alert_s`; negative = before):
+- A pattern that is still active at the alert (`last_vs_alert_s` > -60) and started shortly before it belongs to THIS incident.
+- A pattern that STOPPED more than 60 s before the alert is an earlier, already resolved event. Do NOT report it as evidence; at most mention it in `notes`.
+- A pattern that was present long before the alert at a steady rate is background noise: give it low strength.
 If nothing anomalous is found, return an empty evidence list and say so in `notes`. That is a valid result.
 
 # Output

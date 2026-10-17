@@ -35,7 +35,8 @@ INSERT INTO products (name, price) VALUES
 
 INSERT INTO stock (product_id, quantity) SELECT id, 1000000 FROM products;
 
--- Historical orders: makes the orders table large enough that a missing index is noticeable.
+-- 3 million historical orders: a production-sized table, so that a query
+-- without its index (scenario s09) is really slow (a full scan takes ~75 ms).
 INSERT INTO orders (customer_id, product_id, quantity, amount, charge_id, status, created_at)
 SELECT 1 + (random() * 499)::int,
        1 + (random() * 19)::int,
@@ -44,6 +45,6 @@ SELECT 1 + (random() * 499)::int,
        'ch_seed_' || g,
        'confirmed',
        now() - random() * interval '90 days'
-FROM generate_series(1, 300000) AS g;
+FROM generate_series(1, 3000000) AS g;
 
 ANALYZE;

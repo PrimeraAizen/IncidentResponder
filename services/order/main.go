@@ -5,14 +5,19 @@
 // GET /orders/{id} reads one order.
 // DB and NATS traffic go through Toxiproxy (order→postgres, order→nats) so
 // faults can be injected; the pool size comes from config.yaml.
+// Database migrations (migrations/*.sql) are applied at startup.
 package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -62,6 +67,9 @@ type order struct {
 
 var errTooManyOrders = errors.New("too many orders")
 
+//go:embed migrations/*.sql
+var migrations embed.FS
+
 func main() {
 	o := obs.New("order", version, commit)
 	var cfg config
@@ -74,6 +82,7 @@ func main() {
 		o.Log.Error("invalid database config", "error", err.Error())
 		os.Exit(1)
 	}
+	migrate(o, db)
 	nc, err := o.ConnectNATS(cfg.NATSURL)
 	if err != nil {
 		o.Log.Error("invalid nats config", "error", err.Error())
@@ -160,6 +169,37 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	obs.WriteJSON(w, http.StatusOK, o)
+}
+
+// migrate applies every migrations/*.sql file in name order. Migrations are
+// written to be idempotent (IF NOT EXISTS / IF EXISTS), so each start re-applies
+// them safely. The database may still be starting, so failures are retried for ~1 min.
+func migrate(o *obs.Obs, db *obs.DB) {
+	files, _ := fs.Glob(migrations, "migrations/*.sql")
+	sort.Strings(files)
+	for attempt := 1; attempt <= 30; attempt++ {
+		err := applyMigrations(o, db, files)
+		if err == nil {
+			return
+		}
+		o.Log.Warn("migrations not applied yet, retrying", "upstream", "postgres", "attempt", attempt,
+			"error", err.Error())
+		time.Sleep(2 * time.Second)
+	}
+	o.Log.Error("migrations failed, continuing without them", "upstream", "postgres")
+}
+
+func applyMigrations(o *obs.Obs, db *obs.DB, files []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for _, file := range files {
+		sql, _ := migrations.ReadFile(file)
+		if _, err := db.Exec(ctx, "migration", string(sql)); err != nil {
+			return fmt.Errorf("%s: %w", file, err)
+		}
+		o.Log.Info("migration applied", "file", file)
+	}
+	return nil
 }
 
 // dbError logs the failure with upstream=postgres and returns 503.

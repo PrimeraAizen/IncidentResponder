@@ -1,0 +1,25 @@
+id: s09_order_slow_query
+description: A migration deployed with order drops the index of the fraud check; every new order scans 3M rows.
+setup:
+  - deploy: {service: order, patch: s09_order_drop_index.patch}
+load: {rps: 30, mix: "create=70,get=30"}   # a busy period, so the slow query really hurts
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighLatency
+  service: order
+  severity: warning
+  summary: "p95 latency of POST /orders well above normal"
+expected:
+  root_cause_service: postgres
+  fault_type: slow_query
+  suspect_commit: from_deploy
+  accepted_services: [order]
+  must_not_blame: []
+symptom:
+  - description: order recent_orders query p95 (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(db_query_duration_seconds_bucket{service="order",query="recent_orders"}[1m])))
+    above: 0.03
+  - description: order POST /orders p95 latency (s)
+    promql: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="order",route="/orders"}[1m])))
+    above: 0.2

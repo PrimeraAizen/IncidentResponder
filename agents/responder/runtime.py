@@ -14,6 +14,7 @@ the graph (the graph then degrades gracefully).
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -37,6 +38,10 @@ class RunContext:
     http: httpx.Client
     store: Any = None   # StateStore: every node saves its output there (None in some unit tests)
     docker: Any = None  # Docker SDK client shared by docker_inspect calls (tests inject a fake)
+    deadline: float = math.inf  # time.monotonic() value at which the run must wrap up (RUN_TIMEOUT_S)
+
+    def time_left(self) -> float:
+        return self.deadline - time.monotonic()
 
 
 @dataclass
@@ -61,6 +66,8 @@ def run_agent(spec: AgentSpec, user_message: str, run: RunContext,
     try:
         # ---- 1. tool-calling phase -------------------------------------------------
         while True:
+            if run.time_left() <= 0:  # checked before every LLM call; a call in flight may still finish
+                return _out_of_time(spec, run, llm_calls)
             can_use_tools = (bool(spec.tools) and tool_calls < limits.max_tool_calls_per_agent
                              and llm_calls < limits.max_llm_calls_per_agent - 1)
             if spec.tools and not can_use_tools:
@@ -88,6 +95,8 @@ def run_agent(spec: AgentSpec, user_message: str, run: RunContext,
                     run.calllog.trace(spec.name, f"output still invalid after repair: {_short(exc)}", "red")
                     return AgentFailure(agent=spec.name, error=f"invalid output after repair: {_short(exc)}",
                                         attempts=llm_calls)
+                if run.time_left() <= 0:
+                    return _out_of_time(spec, run, llm_calls)
                 run.calllog.trace(spec.name, f"invalid output, asking for a repair: {_short(exc)}", "yellow")
                 resp = _repair(spec, messages, resp, exc, run, schemas)
                 llm_calls += 1
@@ -95,6 +104,12 @@ def run_agent(spec: AgentSpec, user_message: str, run: RunContext,
         run.calllog.trace(spec.name, f"LLM unavailable: {_short(exc)}", "red")
         return AgentFailure(agent=spec.name, error=str(exc), attempts=exc.attempts)
     raise AssertionError("unreachable")
+
+
+def _out_of_time(spec: AgentSpec, run: RunContext, llm_calls: int) -> AgentFailure:
+    message = f"run time limit reached (RUN_TIMEOUT_S={run.settings.run_timeout_s})"
+    run.calllog.trace(spec.name, message, "red")
+    return AgentFailure(agent=spec.name, error=message, attempts=llm_calls)
 
 
 def _repair(spec: AgentSpec, messages: list[dict], bad: LLMResponse, exc: Exception,
@@ -132,7 +147,7 @@ def run_tool(agent: str, tool: Tool, args: BaseModel, run: RunContext, tool_ctx:
     try:
         result = run.calllog.call(agent=agent, call_type="tool", name=tool.name,
                                   fn=lambda: tool.fn(args, tool_ctx), is_retryable=is_retryable_http,
-                                  attempts=run.settings.retry_attempts)
+                                  attempts=run.settings.retry_attempts, args=_short_args(args, 400))
     except ToolError as exc:
         run.calllog.trace(agent, f"{label} ✗ {exc}", "yellow")
         return {"error": str(exc)}

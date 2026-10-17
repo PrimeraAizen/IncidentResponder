@@ -18,15 +18,27 @@ Do not simply agree: your value is in catching wrong explanations.
    - "component X is down": the services that use X report it unreachable (`health_check` on X shows its dependents' checks), and the errors mention X.
    - "bad deploy / misconfiguration of S": errors in S started right after its deploy; the error kind matches the change (panics, wrong address, refused connections); `build_info` shows the new version.
    - "resource exhaustion": pool in use equals pool max; high pool wait.
-   - "memory/goroutine leak": heap or goroutines growing steadily, restarts.
+   - "memory/goroutine leak": heap or goroutines far above normal (10x or more) and still growing, restarts. A few times more goroutines while requests wait on a slow dependency is a symptom of latency, not a leak: then the fault type is wrong, so reject.
+   - "slow query": one query type is several times slower than before (`db_query_duration_seconds` by query, compared with the offset).
    - "no fault": no component shows errors; only traffic is higher.
 2. Run them with `prom_query` (instant value; use `rate(...[1m])` or `histogram_quantile(0.95, sum by (le, ...) (rate(..._bucket[1m])))`), `loki_query` and `health_check`.
+
+# Compare with before: always
+A value alone means nothing: 0.09 s is normal for one query and 50x too slow for another. For every metric check, compare NOW with BEFORE the incident in the same query, using the `offset` given in the message:
+- e.g. `histogram_quantile(0.95, sum by (le, query) (rate(db_query_duration_seconds_bucket{service="order"}[1m]))) / histogram_quantile(0.95, sum by (le, query) (rate(db_query_duration_seconds_bucket{service="order"}[1m] offset 6m)))`;
+- a ratio above ~2 is clearly worse than before; a ratio around 1 is unchanged.
+
+Never call a value "normal" or "too small to matter" without this comparison.
+
+A restart erases the evidence: after a crash or OOM kill the new process starts with little memory and few goroutines, so "now" looks healthy. For leaks and crashes, compare the PEAK of the incident with before, and count restarts:
+- `max_over_time(go_memstats_heap_alloc_bytes{service="X"}[5m]) / max_over_time(go_memstats_heap_alloc_bytes{service="X"}[5m] offset 10m)`
+- `changes(process_start_time_seconds{service="X"}[10m])` (> 0 means the process restarted). Also check WHEN log patterns happened: errors that stopped minutes before the alert are an earlier event, not this incident.
 
 Important: a service's own `/healthz` can be fine while it IS the root cause, because health checks do not exercise the slow or broken path (e.g. a slow external provider, a code path that panics). Never reject a hypothesis only because the suspect answers `/healthz` quickly.
 
 # Verdict
 - `confirmed`: the checks support the hypothesis and none contradicts it.
-- `rejected`: a check clearly contradicts it (the suspect behaves normally and the data points elsewhere). In `reasoning`, say where the data points instead.
+- `rejected`: a check clearly contradicts it: the suspect behaves normally and the data points elsewhere, OR the component is right but the data shows a different kind of fault. In `reasoning`, say what the data points to instead.
 - `inconclusive`: the data needed is missing or ambiguous.
 
 # Output

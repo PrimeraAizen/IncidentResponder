@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from responder.agents.common import load_prompt
-from responder.agents.planner import SPECIALIST_OBJECTIVES, build_plan
+from responder.agents.planner import DEFAULT_LOOKBACK_MIN, SPECIALIST_OBJECTIVES, build_plan
 from responder.runtime import AgentSpec, RunContext, run_agent
 from responder.schemas import AgentFailure, Alert, InvestigationPlan
 from responder.tools.topology import load_topology
@@ -29,7 +29,7 @@ def run(alert: Alert, incident_id: str, ctx: RunContext) -> tuple[InvestigationP
     components = load_topology()
 
     def fix(data: dict) -> dict:
-        lookback = int(data.get("lookback_minutes") or 10)
+        lookback = int(data.get("lookback_minutes") or DEFAULT_LOOKBACK_MIN)
         lookback = min(MAX_LOOKBACK_MIN, max(MIN_LOOKBACK_MIN, lookback))
         focus = [s for s in data.get("focus_services") or [] if s in components]
         if alert.service in components and alert.service not in focus:

@@ -12,6 +12,9 @@
 - Loop protection: if the Diagnostician re-proposes a hypothesis the Verifier
   already rejected, it is treated as rejected-final and the Reporter takes over.
 - If the Diagnostician fails, the Reporter writes a "failed" report.
+- Limits: once RUN_TIMEOUT_S has passed, every route leads to the Reporter, which
+  writes a "partial" report from whatever exists. If LangGraph's step limit
+  (MAX_GRAPH_STEPS) aborts the run, the last checkpointed state goes to the Reporter.
 
 State: GraphState below (explicit, typed). Every node also saves its output in
 the SQLite StateStore; the LangGraph SqliteSaver checkpoints the graph state.
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import json
 import operator
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,11 +33,13 @@ from typing import Annotated, Callable, TypedDict
 
 import httpx
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from rich.console import Console
 
 from responder.agents import (change_investigator, diagnostician, log_analyst, metrics_analyst, orchestrator,
                               reporter, verifier)
+from responder.agents.planner import build_plan
 from responder.calllog import CallLogger
 from responder.config import Settings
 from responder.llm import LLM, make_llm
@@ -53,9 +59,11 @@ class GraphState(TypedDict, total=False):
     failures: Annotated[list[AgentFailure], operator.add]
     hypotheses: HypothesisSet | None                         # the Diagnostician's latest output
     verdicts: Annotated[list[Verdict], operator.add]
+    tested: Annotated[list[Hypothesis], operator.add]        # tested[i] = the hypothesis verdicts[i] judged
     last_verified: Hypothesis | None                         # the hypothesis the last verdict is about
     rejected: Annotated[list[str], operator.add]             # "service/fault_type" keys the Verifier rejected
     verify_loops: int
+    diagnostician_failed: bool
     report: IncidentReport | None
     report_paths: dict
 
@@ -88,11 +96,11 @@ def build_graph(ctx: RunContext, incident_id: str, checkpointer=None):
         result = diagnostician.run(state["plan"], state["bundles"], ctx,
                                    previous_verdict=verdicts[-1] if verdicts else None,
                                    rejected=state.get("rejected") or [])
-        if isinstance(result, AgentFailure):
-            return {"hypotheses": None, "failures": [result]}
+        if isinstance(result, AgentFailure):  # keep earlier hypotheses (if any): they are still the best we have
+            return {"failures": [result], "diagnostician_failed": True}
         if store:
             store.save_hypotheses(incident_id, state.get("verify_loops", 0), result)
-        return {"hypotheses": result}
+        return {"hypotheses": result, "diagnostician_failed": False}
 
     def verifier_node(state: GraphState) -> dict:
         top = state["hypotheses"].hypotheses[0]
@@ -102,16 +110,15 @@ def build_graph(ctx: RunContext, incident_id: str, checkpointer=None):
             return {"verify_loops": loops, "failures": [result], "last_verified": None}
         if store:
             store.save_verdict(incident_id, loops, result)
-        update = {"verify_loops": loops, "verdicts": [result], "last_verified": top}
+        update = {"verify_loops": loops, "verdicts": [result], "tested": [top], "last_verified": top}
         if result.status == "rejected":
             update["rejected"] = [key(top)]
         return update
 
     def reporter_node(state: GraphState) -> dict:
-        verdicts = state.get("verdicts") or []
         report, paths, failure = reporter.run(
-            state["plan"], state.get("bundles") or [], state.get("hypotheses"),
-            verdicts[-1] if verdicts else None, state.get("last_verified"), state.get("failures") or [], ctx)
+            state["plan"], state.get("bundles") or [], state.get("hypotheses"), state.get("verdicts") or [],
+            state.get("tested") or [], state.get("failures") or [], ctx)
         if store:
             store.save_report(incident_id, report, paths.get("md_path"))
         return {"report": report, "report_paths": paths, "failures": [failure] if failure else []}
@@ -119,7 +126,10 @@ def build_graph(ctx: RunContext, incident_id: str, checkpointer=None):
     # ---- routing (code, not LLM) -------------------------------------------------
     def after_diagnostician(state: GraphState) -> str:
         hypotheses = state.get("hypotheses")
-        if hypotheses is None:
+        if hypotheses is None or state.get("diagnostician_failed"):
+            return "reporter"
+        if ctx.time_left() <= 0:
+            ctx.calllog.trace("graph", "time limit reached → reporter (no verification)", "yellow")
             return "reporter"
         if key(hypotheses.hypotheses[0]) in (state.get("rejected") or []):
             ctx.calllog.trace("graph", "re-proposed an already rejected hypothesis → reporter (loop protection)", "yellow")
@@ -129,6 +139,9 @@ def build_graph(ctx: RunContext, incident_id: str, checkpointer=None):
     def after_verifier(state: GraphState) -> str:
         verdicts = state.get("verdicts") or []
         rejected_now = bool(verdicts) and state.get("last_verified") is not None and verdicts[-1].status == "rejected"
+        if rejected_now and ctx.time_left() <= 0:
+            ctx.calllog.trace("graph", "time limit reached → reporter (no further loop)", "yellow")
+            return "reporter"
         if rejected_now and state.get("verify_loops", 0) < ctx.settings.max_verify_loops:
             ctx.calllog.trace("graph", f"hypothesis rejected → back to the diagnostician "
                                        f"(loop {state['verify_loops']}/{ctx.settings.max_verify_loops})", "yellow")
@@ -151,6 +164,27 @@ def build_graph(ctx: RunContext, incident_id: str, checkpointer=None):
     g.add_conditional_edges(verifier.NAME, after_verifier, [diagnostician.NAME, reporter.NAME])
     g.add_edge(reporter.NAME, END)
     return g.compile(checkpointer=checkpointer)
+
+
+def run_graph(ctx: RunContext, incident_id: str, alert: Alert, checkpointer) -> dict:
+    """Invoke the graph; if the step limit aborts it, report from the last checkpointed state."""
+    graph = build_graph(ctx, incident_id, checkpointer)
+    config = {"recursion_limit": ctx.settings.max_graph_steps, "configurable": {"thread_id": incident_id}}
+    try:
+        return graph.invoke({"alert": alert, "bundles": [], "failures": [], "verdicts": [], "tested": [],
+                             "rejected": []}, config)
+    except GraphRecursionError:
+        state = dict(graph.get_state(config).values)
+        reason = f"graph step limit reached (MAX_GRAPH_STEPS={ctx.settings.max_graph_steps})"
+        ctx.calllog.trace("graph", f"{reason} → reporter", "red")
+        if "plan" not in state:  # aborted before the orchestrator finished
+            state["plan"] = build_plan(alert, incident_id, datetime.now(timezone.utc))
+        report, paths, _ = reporter.run(state["plan"], state.get("bundles") or [], state.get("hypotheses"),
+                                        state.get("verdicts") or [], state.get("tested") or [],
+                                        state.get("failures") or [], ctx, stopped_early=reason)
+        if ctx.store:
+            ctx.store.save_report(incident_id, report, paths.get("md_path"))
+        return {**state, "report": report, "report_paths": paths}
 
 
 @dataclass
@@ -181,11 +215,9 @@ def investigate(alert: Alert, settings: Settings, console: Console | None = None
 
     with httpx.Client(timeout=settings.tool_timeout_s) as http, \
             SqliteSaver.from_conn_string(str(settings.checkpoint_db_path)) as checkpointer:
-        ctx = RunContext(settings=settings, llm=llm, calllog=calllog, http=http, store=store)
-        state = build_graph(ctx, incident_id, checkpointer).invoke(
-            {"alert": alert, "bundles": [], "failures": [], "verdicts": [], "rejected": []},
-            config={"recursion_limit": settings.max_graph_steps, "configurable": {"thread_id": incident_id}},
-        )
+        ctx = RunContext(settings=settings, llm=llm, calllog=calllog, http=http, store=store,
+                         deadline=time.monotonic() + settings.run_timeout_s)
+        state = run_graph(ctx, incident_id, alert, checkpointer)
     store.close()
 
     result = InvestigationResult(

@@ -1,0 +1,23 @@
+id: s12_load_spike_no_fault
+description: Traffic jumps 5x (lunch-time peak); nothing is broken.
+setup:
+  - load_spike: {extra_rps: 40, duration_s: 300}
+warmup_s: 120
+observe_s: 90
+alert:
+  alert_name: HighLatency
+  service: gateway
+  severity: warning
+  summary: "p95 latency of POST /api/orders above normal"
+expected:
+  root_cause_service: none
+  fault_type: no_fault
+  accepted_services: []
+  must_not_blame: []
+symptom:
+  - description: gateway requests per second
+    promql: sum(rate(http_requests_total{service="gateway"}[1m]))
+    above: 35
+  - description: gateway 5xx ratio (nothing is broken)
+    promql: 'sum(rate(http_requests_total{service="gateway",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="gateway"}[1m]))'
+    below: 0.02

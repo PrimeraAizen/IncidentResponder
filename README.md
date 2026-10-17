@@ -19,13 +19,13 @@ To evaluate it objectively, the repository also contains:
 | [docs/scenarios.md](docs/scenarios.md) | test scenarios: fault, alert, expected root cause, symptom check |
 | [docs/design-decisions.md](docs/design-decisions.md) | why multi-agent, why these roles, trade-offs, limitations |
 
-**Status:** Phase 3 is done.
+**Status:** Phase 4 (reliability & quality) is done.
 - All **7 agents** run end to end: Orchestrator → 3 parallel specialists → Diagnostician ⇄ Verifier → Reporter.
 - Investigations are persisted (SQLite state store + LangGraph checkpointer) and end with a Markdown/JSON report.
 - `eval/run_scenario.py` runs scenarios end to end and scores the result against the ground truth.
-- Backend: 5 services with Postgres, Redis and NATS. Harness: scenarios **s01–s08**, each with its own symptom check.
-
-Phase 4 adds the time limit, s09–s12 and the full evaluation (SPEC.md section 12).
+- Backend: 5 services with Postgres, Redis and NATS. Harness: all **12 scenarios** (s01–s12), each with its own symptom check.
+- Limits: a run-time and a step limit both end in a `partial` report.
+- `make eval` runs the full evaluation; results and the per-agent load distribution are in [docs/results.md](docs/results.md).
 
 ---
 
@@ -144,7 +144,15 @@ For each scenario and repeat this runs the whole chain:
 2. all 7 agents investigate;
 3. the result is scored against the scenario's ground truth.
 
-Each run is saved to `eval/results/<timestamp>/<scenario>_<n>.json`, a summary table is printed, and the system is reset at the end. A run is correct when the reported root-cause service and fault type match the scenario (SPEC §8). For deploy scenarios the suspect commit is scored too. `make eval` (all scenarios × 3, with the results table in `docs/results.md`) arrives in Phase 4.
+Each run is saved to `eval/results/<timestamp>/<scenario>_<n>.json`, a summary table is printed, and the system is reset at the end. A run is correct when the reported root-cause service and fault type match the scenario (SPEC §8). For deploy scenarios the suspect commit is scored too.
+
+```bash
+make eval                                   # all 12 scenarios x 3 repeats -> docs/results.md (~4 h at 15 LLM calls/min)
+make load-report RUN=logs/run_<id>.jsonl    # per-agent share of calls in one run (must be <= 40%)
+uv run --project agents python eval/run_all.py --summarize eval/results/<ts>   # rebuild the tables from saved runs
+```
+
+`make eval` also copies a typical correct run to `logs/sample/typical_run.jsonl` (with its report in `reports/sample/`) and writes its load table into `docs/results.md`.
 
 ## All make targets
 
@@ -156,8 +164,9 @@ make reset         back to the healthy baseline (clear faults, reset target-repo
 make scenario      inject a scenario and write its alert: make scenario S=s01
 make investigate   run the agents on an alert: make investigate ALERT=alerts/s01.json
 make test          unit tests (pytest: agents + harness; go test)
-make eval          run all scenarios and score them (Phase 4)
-make load-report   per-agent share of calls (Phase 4)
+make eval-scenario evaluate some scenarios: make eval-scenario S="s01 s02" REPEATS=1
+make eval          all scenarios x 3 repeats, results into docs/results.md
+make load-report   per-agent share of calls of one run: make load-report RUN=logs/run_xxx.jsonl
 ```
 
 ## Repository layout
@@ -186,6 +195,8 @@ docs/            architecture, agents, messages, design decisions
 | `LLM_API_KEY is not set` | `cp .env.example .env` and fill in the LLM section, or use `LLM_PROVIDER=fake`. |
 | `429 … exceeded your current quota` | Set `LLM_MAX_RPM` to your plan's per-minute limit (Gemini free tier: 5). If the *daily* quota is used up, switch `LLM_MODEL`: quotas are per model. |
 | `Connection error` / `Connection reset by peer` for every LLM call | Your network blocks the provider's API (check `curl -I https://generativelanguage.googleapis.com`). Switch network or VPN, or use a provider you can reach (e.g. OpenRouter). The run still ends with a `failed` report: that is the degradation path working. |
+| Reports say "stopped early: run time limit reached" | The provider's rate limit slows the run. Raise `RUN_TIMEOUT_S` in `.env` (e.g. 300) or `LLM_MAX_RPM` if your plan allows more calls per minute. |
+| `make eval` stops with "the LLM provider's quota is exhausted" | Free tiers also cap requests per DAY (`gemini-3.1-flash-lite`: 500/day; one run needs ~15). The interrupted run is not saved; continue the next day with `uv run --project agents python eval/run_all.py --repeats 3 --resume eval/results/<ts>`. |
 | `503 … model is currently experiencing high demand` | The provider is overloaded (temporary). Retry later, or use another model, e.g. `LLM_MODEL=gemini-3.5-flash make investigate ALERT=…`. |
 | `400 … missing a thought_signature` | Fixed: the runtime sends Gemini's assistant messages back unchanged. If you see it, you are on an old checkout. |
 | A symptom check prints ✗ | The fault did not fully develop (e.g. Docker was very slow). Run the scenario again; `make reset` first if anything looks stuck. |

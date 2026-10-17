@@ -97,14 +97,30 @@ def _verdict(status: str) -> Verdict:
 @pytest.mark.parametrize("status, confidence, report_status", [
     ("confirmed", 0.8, "complete"), ("inconclusive", 0.56, "complete"), ("rejected", 0.35, "partial")])
 def test_final_decision_follows_the_verdict(status, confidence, report_status):
-    d = final_decision(HypothesisSet(hypotheses=[H]), _verdict(status), H, [])
+    d = final_decision(HypothesisSet(hypotheses=[H]), [_verdict(status)], [H], [])
     assert (d.confidence, d.status) == (confidence, report_status)
 
 
 def test_final_decision_without_verification_or_with_failures():
-    unverified = final_decision(HypothesisSet(hypotheses=[H]), None, None, [])
+    unverified = final_decision(HypothesisSet(hypotheses=[H]), [], [], [])
     assert (unverified.status, unverified.confidence) == ("partial", 0.56)
-    degraded = final_decision(HypothesisSet(hypotheses=[H]), _verdict("confirmed"), H,
+    degraded = final_decision(HypothesisSet(hypotheses=[H]), [_verdict("confirmed")], [H],
                               [AgentFailure(agent="log_analyst", error="down", attempts=3)])
     assert degraded.status == "partial" and degraded.confidence == 0.64
-    assert final_decision(None, None, None, []).status == "failed"
+    assert final_decision(None, [], [], []).status == "failed"
+
+
+H2 = Hypothesis(hypothesis_id="h1", root_cause_service="nats", fault_type="latency", explanation="y",
+                supporting_evidence=["logs-1"], confidence=0.6)
+
+
+def test_rejected_top_falls_back_to_an_unrejected_hypothesis():
+    # H was judged inconclusive, then the Diagnostician switched to H2, which was rejected.
+    d = final_decision(HypothesisSet(hypotheses=[H2]), [_verdict("inconclusive"), _verdict("rejected")], [H, H2], [])
+    assert d.hypothesis is H and d.verdict.status == "inconclusive"
+
+
+def test_when_everything_was_rejected_the_most_confident_hypothesis_wins():
+    d = final_decision(HypothesisSet(hypotheses=[H2]), [_verdict("rejected"), _verdict("rejected")], [H, H2], [])
+    assert d.hypothesis is H and d.status == "partial" and d.confidence == 0.35
+    assert any("rejected every hypothesis" in item for item in d.limitations)

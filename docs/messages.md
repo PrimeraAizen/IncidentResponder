@@ -19,11 +19,9 @@ All agents exchange **structured messages**: Pydantic v2 models defined in [`age
 
 References to evidence ids that do not exist are dropped.
 
-> **Provenance of the examples.**
-> - `EvidenceBundle` and `HypothesisSet` are verbatim from a real Phase 1 run on scenario s01 with `gemini-3.5-flash`: `logs/sample/phase1_s01_gemini_result.json`, call log `logs/sample/phase1_s01_gemini.jsonl`. The fault was injected at 12:51:36 UTC.
-> - `Alert`, `InvestigationPlan` and `Task` come from an earlier s01 run; the structure is identical.
-> - `Verdict` and `IncidentReport` are illustrative until Phase 3.
-
+> **Provenance of the examples.** All examples are verbatim from real runs on scenario s01 (payment +2 s latency).
+> - `Alert`, the log/metrics `EvidenceBundle`s and the Phase 1 `HypothesisSet`: a Phase 1 run with `gemini-3.5-flash` (`logs/sample/phase1_s01_gemini*`).
+> - The Orchestrator's `InvestigationPlan`, the Change Investigator's `EvidenceBundle`, the `Verdict` and the `IncidentReport`: a Phase 4 evaluation run with all 7 agents and `gemini-3.1-flash-lite` (17 Oct 2026).
 ---
 
 ## Alert
@@ -41,29 +39,49 @@ References to evidence ids that do not exist are dropped.
 
 ## InvestigationPlan and Task
 
+Produced by the Orchestrator. It chose a 10-minute look-back and wrote one objective per specialist; ids and timestamps are filled in by code.
+
 ```json
 {
-  "incident_id": "inc-20261006-115026-333a",
-  "alert": { "...": "the Alert above" },
-  "window_start": "2026-10-06T11:33:36.404182Z",
-  "window_end": "2026-10-06T11:50:26.633991Z",
-  "focus_services": ["gateway", "inventory", "payment", "order", "redis", "postgres", "nats"],
+  "incident_id": "inc-20261017-103122-f332",
+  "alert": {
+    "...": "the Alert"
+  },
+  "window_start": "2026-10-17T10:20:21.938198Z",
+  "window_end": "2026-10-17T10:31:22.574657Z",
+  "focus_services": [
+    "gateway",
+    "inventory",
+    "payment",
+    "order",
+    "postgres",
+    "redis",
+    "nats"
+  ],
   "tasks": [
     {
-      "task_id": "inc-20261006-115026-333a-logs",
+      "task_id": "inc-20261017-103122-f332-log",
       "agent": "log_analyst",
-      "objective": "Find warning/error log patterns, when they started and which services emit them, around the HighLatency alert on gateway.",
-      "window_start": "2026-10-06T11:33:36.404182Z",
-      "window_end": "2026-10-06T11:50:26.633991Z",
-      "focus_services": ["gateway", "inventory", "payment", "order", "redis", "postgres", "nats"]
+      "objective": "Search for error logs, timeouts, or slow query warnings in gateway, inventory, payment, and order services starting from 10:20:00Z.",
+      "window_start": "…",
+      "window_end": "…",
+      "focus_services": "…"
     },
     {
-      "task_id": "inc-20261006-115026-333a-metrics",
+      "task_id": "inc-20261017-103122-f332-metrics",
       "agent": "metrics_analyst",
-      "objective": "Find anomalies in latency, error rates, calls between services, DB pool and resource metrics for gateway, inventory, payment, order, redis, postgres, nats, compared with the baseline before the HighLatency alert.",
-      "window_start": "2026-10-06T11:33:36.404182Z",
-      "window_end": "2026-10-06T11:50:26.633991Z",
-      "focus_services": ["gateway", "inventory", "payment", "order", "redis", "postgres", "nats"]
+      "objective": "Compare p95 latency, request rates, and resource utilization (DB connection pools, Redis latency, NATS queue depth) across all services between 10:20:00Z and 10:31:22Z.",
+      "window_start": "…",
+      "window_end": "…",
+      "focus_services": "…"
+    },
+    {
+      "task_id": "inc-20261017-103122-f332-change",
+      "agent": "change_investigator",
+      "objective": "Identify any deployments, configuration changes, or container restarts/OOM kills for gateway, inventory, payment, and order services within the last 10 minutes.",
+      "window_start": "…",
+      "window_end": "…",
+      "focus_services": "…"
     }
   ]
 }
@@ -116,6 +134,37 @@ Metrics Analyst. Note that it also reports the signals that stayed **normal** (w
 }
 ```
 
+Change Investigator (Phase 4 run). It found the two harmless noise deploys and rated their relevance. The Diagnostician correctly did not blame them:
+
+```json
+{
+  "agent": "change_investigator",
+  "task_id": "inc-20261017-103122-f332-change",
+  "status": "ok",
+  "evidence": [
+    {
+      "evidence_id": "changes-1",
+      "source": "changes",
+      "service": "inventory",
+      "signal": "inventory v3.0.2 deployed 151 s before the alert (commit ee96072 by A. Seitkali, 'inventory: cache the product list for 15s instead of 10s'); diff increases redis cache TTL from 10s to 15s",
+      "observed_at": "2026-10-17T10:27:50Z",
+      "strength": 0.6,
+      "raw_ref": "ee96072"
+    },
+    {
+      "evidence_id": "changes-2",
+      "source": "changes",
+      "service": "notification",
+      "signal": "notification v1.2.1 deployed 152 s before the alert (commit 487c882 by D. Omarova, 'notification: friendlier order confirmation text')",
+      "observed_at": "2026-10-17T10:27:49Z",
+      "strength": 0.1,
+      "raw_ref": "487c882"
+    }
+  ],
+  "notes": "All containers are running with 0 restarts. The inventory cache TTL change is the only configuration modification within the window."
+}
+```
+
 `status` is `ok`, `partial` (a tool failed, so only part of the data was seen) or `failed` (the agent could not finish; `evidence` is empty and `notes` holds the error).
 
 For reference, this is raw `error_pattern_summary` tool output from an earlier s01 run. It is the kind of data the Log Analyst turns into the evidence above:
@@ -157,36 +206,72 @@ On the same query by route, payment's own `POST /charge` was unchanged (ratio 1.
 
 `fault_type` is one of `latency, dependency_down, bad_deploy, memory_leak, goroutine_leak, resource_exhaustion, misconfiguration, slow_query, no_fault`. At most 3 hypotheses, ranked.
 
-## Verdict (illustrative, Phase 3)
+## Verdict
+
+The Verifier designed two checks of its own, a metric and a log query, without seeing the specialists' evidence:
 
 ```json
 {
   "hypothesis_id": "h1",
   "status": "confirmed",
   "checks": [
-    {"evidence_id": "verify-1", "source": "verification", "service": "gateway",
-     "signal": "p95 of gateway→payment calls still 2.05 s; gateway→order p95 normal (0.01 s)",
-     "observed_at": "2026-10-06T11:51:02Z", "strength": 0.9,
-     "raw_ref": "histogram_quantile(0.95, sum by (le, target) (rate(upstream_request_duration_seconds_bucket{service=\"gateway\"}[1m])))"}
+    {
+      "evidence_id": "verify-1",
+      "source": "verification",
+      "service": "gateway",
+      "signal": "p95 upstream latency to payment is 2.95s",
+      "observed_at": "2026-10-17T10:32:05Z",
+      "strength": 1.0,
+      "raw_ref": "histogram_quantile(0.95, sum by (le, target) (rate(upstream_request_duration_seconds_bucket{service=\"gateway\"}[1m])))"
+    },
+    {
+      "evidence_id": "verify-2",
+      "source": "verification",
+      "service": "gateway",
+      "signal": "logs show consistent ~2s latency for payment upstream calls",
+      "observed_at": "2026-10-17T10:32:05Z",
+      "strength": 1.0,
+      "raw_ref": "{service=\"gateway\"} | json | upstream=\"payment\" | line_format \"{{.latency_ms}}\""
+    }
   ],
-  "reasoning": "Only calls to payment are slow; payment answers its own health check quickly, so the delay is in the payment path."
+  "reasoning": "Metrics confirm that the gateway's p95 latency to the payment service is significantly elevated (2.95s), while other upstream dependencies remain performant. Logs corroborate this by showing consistent ~2s response times for payment-related requests, confirming the payment service as the source of the latency."
 }
 ```
 
-## IncidentReport (illustrative, Phase 3)
+## IncidentReport
+
+Root cause, fault type, confidence (0.9 from the Diagnostician + 0.1 for a confirmed verdict) and status are filled in by code (`final_decision`); summary, timeline and actions are written by the Reporter LLM. The Markdown version is rendered from this object:
 
 ```json
 {
-  "incident_id": "inc-20261006-115026-333a",
+  "incident_id": "inc-20261017-103122-f332",
   "status": "complete",
   "root_cause_service": "payment",
   "fault_type": "latency",
-  "confidence": 0.85,
+  "confidence": 1.0,
   "suspect_commit": null,
-  "summary": "Charges to the payment provider became ~2 s slower at 11:48, which made POST /api/orders on the gateway exceed its latency SLO.",
-  "timeline": ["11:48:08 first slow payment responses", "11:48:36 HighLatency alert on gateway", "11:51 hypothesis confirmed"],
-  "evidence_refs": ["logs-1", "metrics-1", "verify-1"],
-  "recommended_actions": ["Check the payment provider status / network path", "Lower the gateway payment timeout and add a circuit breaker"],
+  "summary": "Users experienced high latency on the POST /api/orders endpoint due to slow response times from the payment service. The investigation confirmed that the gateway service is experiencing a p95 latency of approximately 2.95s when communicating with the payment upstream. The team has high confidence in this diagnosis as metrics and logs consistently point to the payment service as the bottleneck.",
+  "timeline": [
+    "10:22:10 - First 'upstream request failed' errors in gateway logs",
+    "10:23:38 - First 'slow upstream response' warnings in gateway logs",
+    "10:29:51 - Metrics confirm elevated p95 latency for gateway-to-payment calls",
+    "10:30:21 - HighLatency alert triggered for /api/orders",
+    "10:32:05 - Verification confirms 2.95s p95 latency to payment service"
+  ],
+  "evidence_refs": [
+    "logs-1",
+    "logs-2",
+    "metrics-1",
+    "metrics-2",
+    "verify-1",
+    "verify-2"
+  ],
+  "recommended_actions": [
+    "Investigate and resolve performance degradation in the payment service.",
+    "Implement circuit breakers in the gateway to prevent cascading failures from slow upstream services.",
+    "Set up specific latency alerts for the payment service to detect degradation before it impacts the gateway.",
+    "Review and optimize timeout configurations for gateway-to-payment requests."
+  ],
   "limitations": []
 }
 ```

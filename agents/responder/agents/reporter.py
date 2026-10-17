@@ -1,6 +1,6 @@
 """Reporter: writes the final incident report and recommended actions.
 
-Input: plan, evidence, hypotheses, verdict (+ failures). Output: IncidentReport (+ Markdown file).
+Input: plan, evidence, hypotheses, verdicts (+ the hypotheses they judged, failures). Output: IncidentReport (+ Markdown file).
 Tools (1): write_report - run by this module's code once the report is valid.
 Done when: the report is saved in reports/.
 
@@ -8,7 +8,8 @@ Division of labour:
 - final_decision() (code) fixes the facts: which hypothesis is the result, the
   confidence after verification/degradation, the report status and the known limitations;
 - the LLM only WRITES: summary, timeline, recommended actions, evidence references;
-- if the LLM fails, a plain template report is written instead, so a run always ends with a report.
+- if the LLM fails, or the run is out of time, a plain template report is written instead,
+  so a run always ends with a report.
 """
 
 from __future__ import annotations
@@ -31,43 +32,72 @@ class FinalDecision:
     status: str           # complete | partial | failed
     confidence: float
     limitations: list[str] = field(default_factory=list)
+    verdict: Verdict | None = None  # the Verifier's verdict about `hypothesis` (None if never verified)
 
 
-def final_decision(hypotheses: HypothesisSet | None, verdict: Verdict | None, verified: Hypothesis | None,
-                   failures: list[AgentFailure]) -> FinalDecision:
-    """Pure rules (unit-tested): the result is the Diagnostician's latest top hypothesis,
-    with confidence adjusted by the verification outcome and by missing data."""
+def _key(h: Hypothesis) -> tuple[str, str]:
+    return h.root_cause_service, h.fault_type
+
+
+def final_decision(hypotheses: HypothesisSet | None, verdicts: list[Verdict], tested: list[Hypothesis],
+                   failures: list[AgentFailure], stopped_early: str | None = None) -> FinalDecision:
+    """Pure rules (unit-tested). `tested[i]` is the hypothesis that `verdicts[i]` judged.
+
+    1. The Diagnostician's latest top hypothesis is the result, unless the Verifier rejected it.
+    2. If it was rejected, the result is the most recent hypothesis the Verifier did not reject.
+    3. If the Verifier rejected every hypothesis it tested, its checks did not settle the question:
+       the result is the hypothesis the Diagnostician was most confident in, marked partial.
+    Confidence: confirmed +0.1, inconclusive x0.8, unverified x0.8, rejected x0.5, each failed specialist x0.8.
+    `stopped_early` (time or step limit) makes the report partial and says why.
+    """
     limitations = [f"{f.agent} failed ({f.error[:120]}); its data is missing" for f in failures]
-    if not hypotheses or not hypotheses.hypotheses:
+    if stopped_early:
+        limitations.insert(0, f"the investigation was stopped early: {stopped_early}")
+    top = hypotheses.hypotheses[0] if hypotheses and hypotheses.hypotheses else None
+    if top is None and not tested:
         return FinalDecision(None, "failed", 0.0, limitations + ["no root-cause hypothesis was produced"])
 
-    top = hypotheses.hypotheses[0]
-    confidence, status = top.confidence, "complete"
-    same = verified is not None and (verified.root_cause_service, verified.fault_type) == (top.root_cause_service, top.fault_type)
-    if verdict is None or not same:
-        confidence *= 0.8
-        status = "partial"
+    judged = list(zip(tested, verdicts))
+    verdict_of_top = next((v for h, v in reversed(judged) if top and _key(h) == _key(top)), None)
+    not_rejected = [(h, v) for h, v in judged if v.status != "rejected"]
+    status = "complete"
+    if top is not None and verdict_of_top is None:              # never verified (time limit, verifier failure)
+        chosen, verdict = top, None
+        confidence, status = top.confidence * 0.8, "partial"
         limitations.append("the final hypothesis was not independently verified")
-    elif verdict.status == "confirmed":
-        confidence = min(1.0, confidence + 0.1)
-    elif verdict.status == "inconclusive":
-        confidence *= 0.8
-        limitations.append(f"verification was inconclusive: {verdict.reasoning[:160]}")
-    else:  # rejected, and the loop limit or loop protection stopped further attempts
-        confidence *= 0.5
-        status = "partial"
-        limitations.append(f"the Verifier rejected this hypothesis and no better one was found: {verdict.reasoning[:160]}")
+    elif top is not None and verdict_of_top.status != "rejected":
+        chosen, verdict = top, verdict_of_top
+    elif not_rejected:                                         # rule 2
+        chosen, verdict = not_rejected[-1]
+    else:                                                      # rule 3: everything tested was rejected
+        chosen = max(reversed(tested), key=lambda h: h.confidence)  # ties: the most recent one
+        verdict = next(v for h, v in reversed(judged) if _key(h) == _key(chosen))
+        limitations.append("the Verifier rejected every hypothesis it tested; reporting the Diagnostician's "
+                           f"most confident one. Last objection: {verdicts[-1].reasoning[:160]}")
+    if verdict is not None:
+        if verdict.status == "confirmed":
+            confidence = min(1.0, chosen.confidence + 0.1)
+        elif verdict.status == "inconclusive":
+            confidence = chosen.confidence * 0.8
+            limitations.append(f"verification was inconclusive: {verdict.reasoning[:160]}")
+        else:
+            confidence, status = chosen.confidence * 0.5, "partial"
     specialist_failures = [f for f in failures if f.agent in ("log_analyst", "metrics_analyst", "change_investigator")]
     if specialist_failures:
         confidence *= 0.8 ** len(specialist_failures)
         status = "partial"
-    return FinalDecision(top, status, round(confidence, 2), limitations)
+    if stopped_early:
+        status = "partial"
+    return FinalDecision(chosen, status, round(confidence, 2), limitations, verdict)
 
 
 def run(plan: InvestigationPlan, bundles: list[EvidenceBundle], hypotheses: HypothesisSet | None,
-        verdict: Verdict | None, verified: Hypothesis | None, failures: list[AgentFailure],
-        ctx: RunContext) -> tuple[IncidentReport, dict, AgentFailure | None]:
-    decision = final_decision(hypotheses, verdict, verified, failures)
+        verdicts: list[Verdict], tested: list[Hypothesis], failures: list[AgentFailure],
+        ctx: RunContext, stopped_early: str | None = None) -> tuple[IncidentReport, dict, AgentFailure | None]:
+    if stopped_early is None and ctx.time_left() <= 0:
+        stopped_early = f"run time limit reached (RUN_TIMEOUT_S={ctx.settings.run_timeout_s})"
+    decision = final_decision(hypotheses, verdicts, tested, failures, stopped_early)
+    verdict = decision.verdict
     evidence = [e for b in bundles for e in b.evidence] + (verdict.checks if verdict else [])
     known_ids = {e.evidence_id for e in evidence}
 
@@ -75,7 +105,7 @@ def run(plan: InvestigationPlan, bundles: list[EvidenceBundle], hypotheses: Hypo
         return _fill(data, plan, decision, known_ids)
 
     failure = None
-    if decision.hypothesis is None:
+    if decision.hypothesis is None or stopped_early:  # nothing to write about, or no time left: template
         report = IncidentReport.model_validate(_fill({}, plan, decision, known_ids))
     else:
         spec = AgentSpec(name=NAME, system_prompt=load_prompt(NAME), tools=[],

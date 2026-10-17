@@ -35,17 +35,26 @@ from responder.config import Settings  # noqa: E402
 from responder.schemas import Alert  # noqa: E402
 
 console = Console()
+# Runs follow each other immediately. Without a pause, the previous scenario's fault would still be
+# inside the next investigation's 5-minute look-back window: a harness artifact, not part of any scenario.
+EVAL_COOLDOWN_S = 150
+
+
+class QuotaExhausted(RuntimeError):
+    """The LLM provider's daily quota is used up: further runs would only measure the quota."""
 
 
 def run_once(scenario_id: str, repeat: int, out_dir: Path, settings: Settings) -> dict:
     scn = load_scenario(scenario_id)
     console.rule(f"[bold]{scn.id}[/] — run {repeat}")
-    run = runner.run_until_alert(scn, say, wait)
+    run = runner.run_until_alert(scn, say, wait, cooldown_s=EVAL_COOLDOWN_S)
 
     started = time.monotonic()
     result = graph.investigate(Alert.model_validate(run.alert), settings, console=console)
     duration_s = round(time.monotonic() - started, 1)
 
+    if any("exceeded your current quota" in f.error for f in result.failures):
+        raise QuotaExhausted(f"{scn.id} run {repeat}: the LLM provider's quota is exhausted; this run is not saved")
     commits = [e["commit"] for e in run.scenario_deploys]
     verdict = score(scn.expected, result.report, commits)
     calls = [json.loads(line) for line in result.log_path.read_text().splitlines()]

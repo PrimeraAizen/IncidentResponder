@@ -175,9 +175,18 @@ The agents must find the root cause the way an on-call engineer would. They may 
 
 ## 4. One investigation, step by step
 
-1. `make scenario S=s01`: the harness adds a 2 s latency toxic to `gateway→payment`, waits 90 s, and writes `alerts/s01.json` (`HighLatency` on gateway).
-2. `make investigate ALERT=alerts/s01.json`: the CLI loads the alert and builds the plan. The window is 15 min before the alert until now; the focus is gateway and its dependencies.
-3. **Log Analyst** calls `error_pattern_summary()`. It finds that `WARN slow upstream response upstream=payment` started at the injection time.
-4. **Metrics Analyst** calls `targets_health()` and `zscore_anomaly()` on upstream p95 latency. It finds that gateway→payment latency jumped from ~0.06 s to ~2 s, while payment's own server latency is unchanged.
-5. **Diagnostician** reads both bundles plus the dependency graph. It returns `payment / latency` and cites the evidence ids.
-6. The call log `logs/run_<id>.jsonl` holds one line per LLM call and per tool call. The final state is saved in `logs/run_<id>_result.json`.
+A real run on s01 (17 Oct 2026, `gemini-3.1-flash-lite`, 27 calls, 95 s). The alert only says: *gateway HighLatency, p95 of POST /api/orders > 1 s*.
+
+1. **Harness.** `make scenario S=s01`:
+   - reset, then two harmless deploys (inventory cache TTL, notification text);
+   - 2 min of normal traffic, then +2 s latency on gateway→payment;
+   - 90 s later, `alerts/s01.json` is written.
+2. **Orchestrator** (1 LLM call). It plans a 10-minute window and focuses on gateway and everything it calls, with one objective per specialist.
+3. **The three specialists run in parallel:**
+   - *Log Analyst:* `error_pattern_summary` finds 427 `WARN slow upstream response upstream=payment` lines, ≈ 2 s each.
+   - *Metrics Analyst:* `zscore_anomaly` shows gateway→payment p95 at 2.89 s vs 0.09 s baseline (z = 100), while the 5xx ratio is unchanged.
+   - *Change Investigator:* `deploy_events`, `docker_inspect` and `git_diff` find the two deploys 151–152 s before the alert. It rates the cache-TTL change 0.6 and the text change 0.1; all containers are running with no restarts.
+4. **Diagnostician** (`dependency_graph` + 1 answer): **payment / latency**, confidence 0.9. It cites the logs and metrics evidence and ignores both deploys.
+5. **Verifier** (2 fresh queries): gateway→payment p95 is still 2.95 s and the other dependencies are normal; gateway logs show ~2 s payment calls. Verdict: **confirmed**.
+6. **Reporter.** `final_decision` raises the confidence to 1.0 (confirmed) with status `complete`. The LLM writes the summary, timeline and 4 recommended actions, and `write_report` saves `reports/<incident_id>.md/.json`.
+7. Every one of the 27 LLM and tool calls is in `logs/run_<id>.jsonl`; every node's output is in `data/incidents.db`.
