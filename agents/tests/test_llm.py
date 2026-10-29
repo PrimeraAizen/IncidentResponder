@@ -1,11 +1,14 @@
 """LLM layer: provider message pass-through, retry hints, client-side rate limit."""
 
+import dataclasses
 import time
+from types import SimpleNamespace
 
 import httpx
 import openai
 
-from responder.llm import LLMResponse, RateLimiter, ToolCall, retry_after_seconds
+from responder.calllog import CallLogger
+from responder.llm import LLMResponse, OpenAICompatLLM, RateLimiter, ToolCall, retry_after_seconds
 
 
 def test_provider_message_is_sent_back_unchanged():
@@ -46,3 +49,20 @@ def test_rate_limiter_blocks_when_the_minute_is_full():
 def test_rate_limiter_disabled_by_default():
     limiter = RateLimiter(max_per_minute=0)
     assert all(limiter.acquire() == 0 for _ in range(100))
+
+
+def test_reasoning_effort_is_sent_only_when_configured(settings):
+    sent = {}
+
+    def fake_create(**kwargs):
+        sent.update(kwargs)
+        message = SimpleNamespace(content='{"ok": true}', tool_calls=None, model_dump=lambda **_: {"role": "assistant"})
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+    for effort in (None, "low"):
+        sent.clear()
+        cfg = dataclasses.replace(settings, llm_provider="openai", llm_api_key="k", llm_reasoning_effort=effort)
+        llm = OpenAICompatLLM(cfg, CallLogger(settings.logs_dir / "t.jsonl", "r", "i"))
+        llm.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+        llm.chat(agent="a", messages=[{"role": "user", "content": "x"}])
+        assert sent.get("reasoning_effort") == effort

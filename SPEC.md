@@ -504,10 +504,10 @@ Dates assume today = 6 Oct 2026. Update checkboxes as you go.
 - [x] `run_all.py`, `load_report.py`, `docs/results.md`
 - [x] Prompt/tool tuning to reach ≥90% overall over 3 repeats — 3 tuning passes (history in `docs/results.md`); every scenario diagnosed correctly with the final prompts
 - **Accept:** `make eval` ≥ 10/12 scenarios correct (majority of repeats); every agent ≤40% of calls on a typical run.
-  - ⏳ Full evaluation in progress. On 17 Oct the first 9 runs (s01–s09, repeat 1) were all correct; then the free tier's daily quota (500 requests) ran out. The remaining 27 runs resume with `--resume eval/results/20261017T131212Z`. Load distribution of a typical run: largest share 25% ✅.
+  - ✅ Full evaluation (17–27 Oct, `gemini-3.1-flash-lite`, 3 repeats): **12/12 scenarios** correct by majority, **35/36 runs** (97%), deploy commits 12/12. Typical run (s05 run 3): largest agent share 21% ✅. Details in `docs/results.md`.
 
 ### Phase 5 — Assignment 4 submission (2–8 Nov)
-- [ ] Final full eval run; commit `logs/sample/` + results
+- [x] Final full eval run; commit `logs/sample/` + results — 35/36 runs, 12/12 scenarios (`docs/results.md`)
 - [ ] README final, docs updated with real JSON examples
 - [ ] Fresh-clone test: `git clone` → `make target-init && make up && make eval` works on a clean machine
 - [ ] Buffer for bugs

@@ -30,6 +30,7 @@ class Settings:
     llm_timeout_s: int
     llm_max_rpm: int           # client-side requests/minute cap (0 = unlimited)
     llm_max_retry_wait_s: int  # longest wait between retries, even if the server asks for more
+    llm_reasoning_effort: str | None  # "low" | "medium" | "high" for reasoning models (gpt-oss); None = model default
     # Data sources (as seen from the host)
     prom_url: str
     loki_url: str
@@ -74,6 +75,7 @@ class Settings:
             llm_timeout_s=_int("LLM_TIMEOUT_S", 60),
             llm_max_rpm=_int("LLM_MAX_RPM", 0),
             llm_max_retry_wait_s=_int("LLM_MAX_RETRY_WAIT_S", 60),
+            llm_reasoning_effort=os.getenv("LLM_REASONING_EFFORT") or None,
             prom_url=os.getenv("PROM_URL", "http://localhost:9090").rstrip("/"),
             loki_url=os.getenv("LOKI_URL", "http://localhost:3100").rstrip("/"),
             max_tool_calls_per_agent=_int("MAX_TOOL_CALLS_PER_AGENT", 4),

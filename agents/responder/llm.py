@@ -171,12 +171,15 @@ class OpenAICompatLLM(LLM):
     def __init__(self, settings: Settings, calllog: CallLogger):
         super().__init__(calllog, settings.retry_attempts, settings.llm_max_rpm, settings.llm_max_retry_wait_s)
         self.model_name = settings.llm_model
+        self.reasoning_effort = settings.llm_reasoning_effort
         # max_retries=0: tenacity (in CallLogger) is the only retry layer, so every attempt is logged.
         self.client = openai.OpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key,
                                     timeout=settings.llm_timeout_s, max_retries=0)
 
     def _complete(self, agent, messages, tools, allow_tools) -> LLMResponse:
         kwargs: dict[str, Any] = {"model": self.model_name, "messages": messages, "temperature": 0}
+        if self.reasoning_effort:  # only sent when configured: not every provider/model knows it
+            kwargs["reasoning_effort"] = self.reasoning_effort
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto" if allow_tools else "none"

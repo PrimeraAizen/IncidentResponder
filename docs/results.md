@@ -10,21 +10,24 @@ This file collects measured results:
 A run is correct when the reported root-cause service and fault type match the scenario's ground truth and no `must_not_blame` service is named (SPEC §8). A scenario counts as solved when the majority of its repeats are correct. "commit" = suspect-commit accuracy for scenarios caused by a deploy.
 
 <!-- eval:start -->
-Run on 2026-10-17 with `gemini-3.1-flash-lite`, 1 repeat(s) per scenario.
+Run on 2026-10-17 … 2026-10-27 with `gemini-3.1-flash-lite`, 3 repeat(s) per scenario.
 
-**Scenarios correct (majority of repeats): 9/9** · runs correct: 9/9 (100%) · mean investigation time: 38 s · mean tokens per run: 40,597
+**Scenarios correct (majority of repeats): 12/12** · runs correct: 35/36 (97%) · mean investigation time: 64 s · mean tokens per run: 40,395
 
 | scenario | expected | reported (per run) | correct | majority | commit | time s | LLM | tools | tokens |
 |---|---|---|---|---|---|---|---|---|---|
-| s01_payment_latency | payment / latency | payment/latency | 1/1 | ✅ | - | 12 | 15.0 | 13.0 | 40,027 |
-| s02_postgres_down | postgres / dependency_down | postgres/dependency_down | 1/1 | ✅ | - | 49 | 13.0 | 13.0 | 39,715 |
-| s03_redis_down | redis / dependency_down | redis/dependency_down | 1/1 | ✅ | - | 134 | 19.0 | 17.0 | 50,003 |
-| s04_order_bad_deploy | order / bad_deploy | order/bad_deploy | 1/1 | ✅ | 1/1 | 12 | 13.0 | 13.0 | 37,910 |
-| s05_notification_memory_leak | notification / memory_leak | notification/memory_leak | 1/1 | ✅ | - | 47 | 14.0 | 14.0 | 32,075 |
-| s06_order_pool_exhaustion | order / resource_exhaustion | order/resource_exhaustion | 1/1 | ✅ | 1/1 | 12 | 14.0 | 14.0 | 39,464 |
-| s07_nats_down | nats / dependency_down | nats/dependency_down | 1/1 | ✅ | - | 24 | 15.0 | 15.0 | 42,176 |
-| s08_gateway_misconfig | gateway / misconfiguration | gateway/misconfiguration | 1/1 | ✅ | 1/1 | 22 | 15.0 | 13.0 | 43,077 |
-| s09_order_slow_query | postgres / slow_query | postgres/slow_query | 1/1 | ✅ | 1/1 | 31 | 15.0 | 13.0 | 40,929 |
+| s01_payment_latency | payment / latency | payment/latency, payment/latency, payment/latency | 3/3 | ✅ | - | 56 | 16.7 | 14.7 | 44,768 |
+| s02_postgres_down | postgres / dependency_down | postgres/dependency_down, postgres/dependency_down, postgres/dependency_down | 3/3 | ✅ | - | 31 | 13.3 | 13.0 | 41,064 |
+| s03_redis_down | redis / dependency_down | redis/dependency_down, redis/dependency_down, redis/dependency_down | 3/3 | ✅ | - | 83 | 17.3 | 16.7 | 45,417 |
+| s04_order_bad_deploy | order / bad_deploy | order/bad_deploy, order/bad_deploy, order/bad_deploy | 3/3 | ✅ | 3/3 | 21 | 13.0 | 13.0 | 38,607 |
+| s05_notification_memory_leak | notification / memory_leak | notification/memory_leak, notification/memory_leak, notification/memory_leak | 3/3 | ✅ | - | 60 | 14.0 | 14.0 | 33,351 |
+| s06_order_pool_exhaustion | order / resource_exhaustion | order/resource_exhaustion, order/resource_exhaustion, order/resource_exhaustion | 3/3 | ✅ | 3/3 | 32 | 13.7 | 13.7 | 39,633 |
+| s07_nats_down | nats / dependency_down | nats/dependency_down, nats/resource_exhaustion, nats/dependency_down | 2/3 | ✅ | - | 49 | 15.0 | 15.0 | 41,830 |
+| s08_gateway_misconfig | gateway / misconfiguration | gateway/misconfiguration, gateway/misconfiguration, gateway/misconfiguration | 3/3 | ✅ | 3/3 | 30 | 14.7 | 13.3 | 42,302 |
+| s09_order_slow_query | postgres / slow_query | postgres/slow_query, postgres/slow_query, postgres/slow_query | 3/3 | ✅ | 3/3 | 32 | 15.0 | 13.0 | 40,991 |
+| s10_inventory_goroutine_leak | inventory / goroutine_leak | inventory/goroutine_leak, inventory/goroutine_leak, inventory/goroutine_leak | 3/3 | ✅ | - | 155 | 14.0 | 14.3 | 37,754 |
+| s11_payment_retry_storm | payment / latency | payment/latency, payment/latency, payment/latency | 3/3 | ✅ | - | 50 | 13.7 | 12.3 | 38,737 |
+| s12_load_spike_no_fault | none / no_fault | none/no_fault, none/no_fault, none/no_fault | 3/3 | ✅ | - | 162 | 15.3 | 14.0 | 40,283 |
 <!-- eval:end -->
 
 ## Load distribution of a typical run
@@ -32,18 +35,42 @@ Run on 2026-10-17 with `gemini-3.1-flash-lite`, 1 repeat(s) per scenario.
 No agent may perform more than 40% of all LLM + tool calls (SPEC 2.4). Retried attempts are counted once.
 
 <!-- load-report:start -->
-Call log: `logs/sample/typical_run.jsonl (s06_order_pool_exhaustion, run 1)` (28 calls). Limit: no agent above 40%.
+Call log: `logs/sample/typical_run.jsonl (s05_notification_memory_leak, run 3)` (28 calls). Limit: no agent above 40%.
 
 | agent | LLM calls | tool calls | total | share | ≤ 40% |
 |---|---|---|---|---|---|
-| verifier | 3 | 4 | 7 | 25% | ✅ |
 | change_investigator | 3 | 3 | 6 | 21% | ✅ |
 | metrics_analyst | 2 | 4 | 6 | 21% | ✅ |
-| log_analyst | 2 | 1 | 3 | 11% | ✅ |
+| log_analyst | 3 | 2 | 5 | 18% | ✅ |
+| verifier | 2 | 3 | 5 | 18% | ✅ |
 | diagnostician | 2 | 1 | 3 | 11% | ✅ |
 | reporter | 1 | 1 | 2 | 7% | ✅ |
 | orchestrator | 1 | 0 | 1 | 4% | ✅ |
 <!-- load-report:end -->
+
+## What the Verifier did in the final evaluation
+
+Counted from the state store (`data/incidents.db`, tables `hypotheses` and `verdicts`) for the 36 scored runs.
+
+- The Diagnostician's first top hypothesis was correct in **36/36** runs.
+- The Verifier gave 40 verdicts:
+
+  | verdict | hypothesis correct | hypothesis wrong |
+  |---|---|---|
+  | confirmed | 30 | 1 |
+  | rejected | 6 | 3 |
+
+- It rejected a correct hypothesis 6 times: s01 run 2, s03 runs 1 and 3, s07 run 2, s12 runs 1 and 2.
+  - In 5 of them, the final-decision rule still reported the right answer. That rule says: when every tested hypothesis is rejected, report the most confident one, marked `partial`.
+  - The 3 rejected wrong hypotheses were all second-round alternatives, offered after such a false rejection.
+- **The one wrong run, s07 run 2.**
+  - The Diagnostician said nats / dependency_down, with confidence 1.0.
+  - The Verifier read order's `nats: outbound buffer limit exceeded` as broker congestion and rejected it. That message comes from the NATS *client*: while the server is gone, the client buffers outgoing messages until the buffer is full.
+  - The second hypothesis, nats / resource_exhaustion, was confirmed: right component, wrong fault type.
+
+So, with the tuned Diagnostician, the Verifier caught no wrong first diagnosis in the final evaluation, and one of its false rejections cost a run. During tuning it did catch one (s07, pass 1: the first hypothesis was rejected and the second confirmed). Its confirmations add checked evidence to every report. The final-decision rule limits the damage of its mistakes.
+
+Not scored: 3 runs in which an agent's LLM call failed after all retries because Gemini was overloaded (503 "high demand", timeouts). They were run again, as design decision 61 requires, and are kept locally in `eval/results/20261017T131212Z/excluded/`.
 
 ## Tuning history
 

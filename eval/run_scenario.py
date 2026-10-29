@@ -40,8 +40,18 @@ console = Console()
 EVAL_COOLDOWN_S = 150
 
 
-class QuotaExhausted(RuntimeError):
-    """The LLM provider's daily quota is used up: further runs would only measure the quota."""
+class LLMUnavailable(RuntimeError):
+    """The LLM provider cannot be used (quota used up, unreachable, overloaded): further runs would measure the provider."""
+
+
+# Final LLM errors (after all retries) that are about the provider, not about the agents:
+# quota used up, network down, model overloaded (503 "high demand"), no answer within LLM_TIMEOUT_S.
+PROVIDER_ERRORS = ("exceeded your current quota", "Connection error", "Error code: 503", "Request timed out")
+
+
+def provider_failure(failures: list) -> str | None:
+    """The first agent failure caused by the LLM provider itself, if any."""
+    return next((f.error for f in failures if any(m in f.error for m in PROVIDER_ERRORS)), None)
 
 
 def run_once(scenario_id: str, repeat: int, out_dir: Path, settings: Settings) -> dict:
@@ -53,8 +63,8 @@ def run_once(scenario_id: str, repeat: int, out_dir: Path, settings: Settings) -
     result = graph.investigate(Alert.model_validate(run.alert), settings, console=console)
     duration_s = round(time.monotonic() - started, 1)
 
-    if any("exceeded your current quota" in f.error for f in result.failures):
-        raise QuotaExhausted(f"{scn.id} run {repeat}: the LLM provider's quota is exhausted; this run is not saved")
+    if error := provider_failure(result.failures):
+        raise LLMUnavailable(f"{scn.id} run {repeat}: {error}; this run is not saved")
     commits = [e["commit"] for e in run.scenario_deploys]
     verdict = score(scn.expected, result.report, commits)
     calls = [json.loads(line) for line in result.log_path.read_text().splitlines()]

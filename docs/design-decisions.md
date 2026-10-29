@@ -217,12 +217,16 @@ Following the rule "choose the simplest reasonable option and note it":
     - the Verifier rejects a hypothesis whose fault type the data contradicts.
 
 61. **The evaluation respects the provider's daily quota.** The free tier of `gemini-3.1-flash-lite` allows 500 requests per day; a full run needs ~15 LLM calls, so 36 runs plus tuning do not fit into one day.
-    - When a run fails because the quota is exhausted, `run_all.py` does not save it (that would measure the quota, not the agents) and stops.
+    - When an agent's LLM call fails after all retries for a reason on the provider's side, `run_all.py` does not save the run (that would measure the provider, not the agents) and stops. Provider reasons: quota exhausted, unreachable ("Connection error"), overloaded (503 "high demand"), no answer within `LLM_TIMEOUT_S`.
+    - The rule does not look at the outcome: a correct run with a provider failure is excluded too. Excluding only the wrong ones would inflate the accuracy.
+    - Found on 27 Oct: the API host was unreachable from the network for a whole evaluation session. Five runs were saved as "wrong" with `unknown / no_fault`, each after one tool call; they were deleted and the guard was extended to connection errors.
+    - Later that day Gemini was overloaded (503 "high demand", 60 s timeouts). Three runs had an agent fail after all retries: two wrong (s01 run 2, s11 run 1: the Log and Metrics Analysts got no answer) and one correct (s02 run 2: the Orchestrator failed and the fallback plan worked). All three were moved to `excluded/` in the results directory (kept for audit, not scored) and run again.
     - `--resume <dir>` continues the next day in the same results directory, skipping saved runs.
     - With a paid key the whole evaluation runs in one go.
 
 ## 9. Known limitations
 
+- **The Verifier rejects too often.** In the final evaluation it rejected 6 correct hypotheses and no wrong first diagnosis (details in `docs/results.md`). The final-decision rule recovered 5 of the 6; the sixth (s07 run 2) became the only wrong run. Its typical mistake is reading a client-side symptom (a full NATS client buffer, a cache that still serves) as proof that the dependency is up.
 - The plan window (15 min before the alert) can still contain the tail of a previous scenario when scenarios run back-to-back. The specialists are told to mark patterns that started long before the alert. Phase 3/4 (the Orchestrator's window, eval cooldowns) will revisit this.
 - Loki's `label/values` endpoint can lag a minute behind fresh streams. The Log Analyst uses `error_pattern_summary` / `loki_query` first, and those are not affected.
 - One evaluation run takes ~7 min: ~4.5 min of scenario (reset, noise deploys, 120 s warm-up, 90 s observation) plus the investigation (paced by the provider's rate limit). 12 × 3 runs take ~4 h, not the spec's 90 min. Shortening the warm-up would leave the z-score baseline empty, and shortening the observation would leave slow faults (leaks) undeveloped. We chose correct scenarios over a fast evaluation.

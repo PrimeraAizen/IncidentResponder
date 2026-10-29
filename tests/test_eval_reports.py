@@ -2,6 +2,8 @@
 
 from eval.load_report import agent_shares, replace_section
 from eval.run_all import summarize, typical_run
+from eval.run_scenario import provider_failure
+from responder.schemas import AgentFailure
 
 
 def call(agent: str, kind: str = "llm", status: str = "ok") -> dict:
@@ -44,3 +46,30 @@ def test_summary_uses_the_majority_of_repeats():
 def test_typical_run_is_a_correct_run_with_median_calls():
     records = [record("s01", True, 10), record("s02", True, 14), record("s03", True, 20), record("s04", False, 12)]
     assert typical_run(records)["scenario"] == "s02"
+
+
+def test_run_dates_span_resumed_evaluations():
+    from eval.run_all import run_dates
+    assert run_dates([{"run_id": "20261017T131529Z-ab"}, {"run_id": "20261027T090000Z-cd"}]) == "2026-10-17 … 2026-10-27"
+    assert run_dates([{"run_id": "20261017T131529Z-ab"}]) == "2026-10-17"
+
+
+def test_pending_runs_skip_saved_results_in_round_robin_order(tmp_path):
+    from eval.run_all import pending_runs
+    (tmp_path / "s01_payment_latency_1.json").write_text("{}")
+    (tmp_path / "s02_postgres_down_1.json").write_text("{}")
+    assert pending_runs(["s01", "s02", "s03"], 2, tmp_path) == [("s03", 1), ("s01", 2), ("s02", 2), ("s03", 2)]
+
+
+def test_provider_failures_stop_the_evaluation_but_agent_failures_do_not():
+    def failed(error: str) -> AgentFailure:
+        return AgentFailure(agent="log_analyst", error=error, attempts=3)
+
+    down = failed("LLM call failed (gemini-3.1-flash-lite): Connection error.")
+    quota = failed("Error code: 429 - You exceeded your current quota, please check your plan")
+    busy = failed("LLM call failed (gemini-3.1-flash-lite): Error code: 503 - This model is currently experiencing high demand")
+    slow = failed("LLM call failed (gemini-3.1-flash-lite): Request timed out.")
+    agent = failed("invalid JSON in the final answer")
+    assert provider_failure([agent, down]) == down.error
+    assert all(provider_failure([f]) == f.error for f in (quota, busy, slow))
+    assert provider_failure([agent]) is None and provider_failure([]) is None

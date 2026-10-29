@@ -4,11 +4,12 @@
     uv run --project agents python eval/run_all.py --only s01 s11       # a subset
     uv run --project agents python eval/run_all.py --summarize eval/results/<ts>   # rebuild the summary only
     uv run --project agents python eval/run_all.py --resume eval/results/<ts>      # continue an interrupted eval
+    uv run --project agents python eval/run_all.py --resume eval/results/<ts> --max-runs 5   # only 5 runs now
 
 Each run is saved as it finishes (eval/results/<ts>/<scenario>_<n>.json), so a
 crash in run 30 of 36 loses nothing: --resume continues in the same directory
 (skipping saved runs) and --summarize rebuilds the tables from the files. If the
-LLM provider's daily quota runs out, the evaluation stops instead of saving failed runs.
+LLM provider fails (daily quota used up, or unreachable), the evaluation stops instead of saving failed runs.
 The summary also picks a typical correct run, writes its per-agent load report,
 and copies its call log and report to logs/sample/ and reports/sample/.
 """
@@ -31,7 +32,7 @@ from chaos import runner  # noqa: E402
 from chaos.cli import say  # noqa: E402
 from chaos.scenario import scenario_files  # noqa: E402
 from eval import load_report  # noqa: E402
-from eval.run_scenario import QuotaExhausted, console, print_summary, run_once  # noqa: E402
+from eval.run_scenario import LLMUnavailable, console, print_summary, run_once  # noqa: E402
 from responder.config import Settings  # noqa: E402
 
 RESULTS_MD = ROOT / "docs" / "results.md"
@@ -64,7 +65,7 @@ def results_markdown(rows: list[dict], records: list[dict], model: str) -> str:
     runs_correct = sum(r["correct"] for r in rows)
     runs_total = sum(r["runs"] for r in rows)
     lines = [
-        f"Run on {datetime.now(timezone.utc):%Y-%m-%d} with `{model}`, {max(r['runs'] for r in rows)} repeat(s) per scenario.",
+        f"Run on {run_dates(records)} with `{model}`, {max(r['runs'] for r in rows)} repeat(s) per scenario.",
         "",
         f"**Scenarios correct (majority of repeats): {sum(r['majority'] for r in rows)}/{len(rows)}** · "
         f"runs correct: {runs_correct}/{runs_total} ({runs_correct / runs_total:.0%}) · "
@@ -81,6 +82,12 @@ def results_markdown(rows: list[dict], records: list[dict], model: str) -> str:
         lines += ["", "⚠ Some runs' symptom checks failed (the fault did not fully develop): "
                   + ", ".join(r["scenario"] for r in rows if not r["symptoms_ok"])]
     return "\n".join(lines)
+
+
+def run_dates(records: list[dict]) -> str:
+    """Date span of the runs, from their run ids ("20261017T131529Z-…"); resumed evaluations span several days."""
+    days = sorted({f"{r['run_id'][:4]}-{r['run_id'][4:6]}-{r['run_id'][6:8]}" for r in records})
+    return days[0] if len(days) == 1 else f"{days[0]} … {days[-1]}"
 
 
 def typical_run(records: list[dict]) -> dict:
@@ -108,21 +115,29 @@ def write_results(records: list[dict], model: str) -> None:
     console.print(f"[green]✓[/] docs/results.md updated; typical run: {typical['scenario']} → logs/sample/typical_run.jsonl")
 
 
+def pending_runs(scenarios: list[str], repeats: int, out_dir: Path) -> list[tuple[str, int]]:
+    """(scenario, repeat) pairs without a saved result, in round-robin order: all of repeat 1, then repeat 2, …"""
+    return [(sc, r) for r in range(1, repeats + 1) for sc in scenarios
+            if not list(out_dir.glob(f"{sc}_*_{r}.json"))]
+
+
 def main(repeats: int = typer.Option(3, help="Runs per scenario."),
          only: list[str] = typer.Option(None, help="Run only these scenario ids (repeatable)."),
          resume: Path = typer.Option(None, help="Continue an interrupted evaluation in this results dir."),
+         max_runs: int = typer.Option(0, help="Do at most this many runs now (0 = all remaining); resume later."),
          summarize_dir: Path = typer.Option(None, "--summarize", help="Only rebuild the summary from this results dir.")) -> None:
     settings = Settings.from_env()
     if summarize_dir is None:
         scenarios = only or [p.stem.split("_")[0] for p in scenario_files()]
         out_dir = resume or ROOT / "eval" / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        todo = pending_runs(scenarios, repeats, out_dir)
+        if max_runs:
+            todo = todo[:max_runs]
+        console.print(f"{len(todo)} run(s) to do now: {', '.join(f'{sc}_{r}' for sc, r in todo)}")
         try:
-            for repeat in range(1, repeats + 1):        # round-robin: one full pass per repeat
-                for scenario_id in scenarios:
-                    if list(out_dir.glob(f"{scenario_id}_*_{repeat}.json")):
-                        continue                        # already done (--resume)
-                    run_once(scenario_id, repeat, out_dir, settings)
-        except QuotaExhausted as exc:
+            for scenario_id, repeat in todo:
+                run_once(scenario_id, repeat, out_dir, settings)
+        except LLMUnavailable as exc:
             console.print(f"[red]✗ {exc}[/]\n  Resume later with: python eval/run_all.py --repeats {repeats} --resume {out_dir}")
         finally:
             runner.reset_all(say)
