@@ -32,6 +32,8 @@ Each scenario is a YAML file in [`scenarios/`](../scenarios). It contains:
 
 s11 and s12 are the most important for the defense. They show the system does not simply blame the loudest red graph or the latest deploy.
 
+**Final evaluation:** the agents solved all 12 scenarios (35/36 runs, 3 repeats each). Results per scenario: [results.md](results.md#evaluation-accuracy-per-scenario).
+
 ## How one scenario run works
 
 `make scenario S=sNN` (= `python -m chaos scenario sNN`):
@@ -51,6 +53,8 @@ s11 and s12 are the most important for the defense. They show the system does no
 
 Then `make investigate ALERT=alerts/sNN.json` and, afterwards, `make reset`.
 
+In the evaluation (`make eval`), every run first waits 150 s, so the previous scenario's fault has left the investigation's 5-minute look-back window; then the same steps follow, and the agents investigate right after step 8.
+
 ## Setup step types
 
 | Step | Example | Mechanism |
@@ -63,4 +67,4 @@ Then `make investigate ALERT=alerts/sNN.json` and, afterwards, `make reset`.
 
 ## Validation (Phase 2)
 
-All of s01–s08 were run on 12 Oct 2026 and s09–s12 on 17 Oct 2026; every symptom check passed. s05 and s06 passed after two harness fixes, described in [results.md](results.md#phase-2-scenario-validation), which also has the measured values. `make reset` returned the system to healthy after each run.
+All of s01–s08 were run on 12 Oct 2026 and s09–s12 on 17 Oct 2026; every symptom check passed. s05 and s06 passed after two harness fixes, described in [results.md](results.md#scenario-validation-harness), which also has the measured values. `make reset` returned the system to healthy after each run.

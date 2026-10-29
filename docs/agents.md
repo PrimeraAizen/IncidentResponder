@@ -38,21 +38,25 @@ Specialists report **observations** (with `service` = the component that emitted
 | Verifier | 1–2 per loop | 2–3 | same, `MAX_VERIFY_LOOPS=2` |
 | Reporter | 1 | 1 | same |
 
-Expected total ≈ 25–35 calls; the largest agent ≈ 15–25%. The CLI prints the per-agent shares after each run. `eval/load_report.py` (Phase 4) computes them from the JSONL call logs.
+Measured in the final evaluation (36 runs, `gemini-3.1-flash-lite`): 26–38 calls per run, 28.6 on average. The CLI prints the per-agent shares after each run, and `eval/load_report.py` computes them from the JSONL call logs.
 
-Measured on a full 7-agent run (s01, `gemini-3.1-flash-lite`, 17 Oct 2026; `make load-report`), 27 calls in total:
+The typical run (s05 run 3, committed as `logs/sample/typical_run.jsonl`) had 28 calls:
 
 | Agent | LLM calls | Tool calls | Share |
 |---|---|---|---|
-| metrics_analyst | 3 | 4 | 26% |
-| change_investigator | 3 | 3 | 22% |
-| verifier | 3 | 2 | 19% |
-| log_analyst | 2 | 1 | 11% |
+| change_investigator | 3 | 3 | 21% |
+| metrics_analyst | 2 | 4 | 21% |
+| log_analyst | 3 | 2 | 18% |
+| verifier | 2 | 3 | 18% |
 | diagnostician | 2 | 1 | 11% |
 | reporter | 1 | 1 | 7% |
 | orchestrator | 1 | 0 | 4% |
 
-The largest share is 26%, well under the 40% limit. The evaluation's typical-run table is in [results.md](results.md).
+The 40% limit also held in every one of the 36 runs. The highest share of any agent in any run was 37%: the Verifier in s03 run 3, where it ran twice because it rejected two hypotheses. Each agent's highest share over all runs:
+
+| verifier | change_investigator | metrics_analyst | diagnostician | log_analyst | reporter | orchestrator |
+|---|---|---|---|---|---|---|
+| 37% | 23% | 23% | 19% | 19% | 8% | 4% |
 
 ## Tools
 

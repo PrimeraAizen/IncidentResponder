@@ -224,9 +224,30 @@ Following the rule "choose the simplest reasonable option and note it":
     - `--resume <dir>` continues the next day in the same results directory, skipping saved runs.
     - With a paid key the whole evaluation runs in one go.
 
-## 9. Known limitations
+## 9. Choices made in Phase 5 (final evaluation & submission)
 
-- **The Verifier rejects too often.** In the final evaluation it rejected 6 correct hypotheses and no wrong first diagnosis (details in `docs/results.md`). The final-decision rule recovered 5 of the 6; the sixth (s07 run 2) became the only wrong run. Its typical mistake is reading a client-side symptom (a full NATS client buffer, a cache that still serves) as proof that the dependency is up.
-- The plan window (15 min before the alert) can still contain the tail of a previous scenario when scenarios run back-to-back. The specialists are told to mark patterns that started long before the alert. Phase 3/4 (the Orchestrator's window, eval cooldowns) will revisit this.
+62. **The evaluation runs in batches.** `run_all.py --max-runs N` does only the next N pending runs, in round-robin order (all of repeat 1, then repeat 2, …). The free tier's daily quota and the operator's time (one run takes ~8 min) made one 5-hour session impractical. The 36 runs were done in several sessions between 17 and 27 Oct, all in one results directory. The results line in `docs/results.md` shows the date span.
+
+63. **`LLM_REASONING_EFFORT` (optional) for local reasoning models.** It is sent to the provider only when set. We tested `gpt-oss:20b` via Ollama on a second laptop (GTX 1650, 4 GB VRAM, so most of the model runs on the CPU):
+    - measured speed: 75 tokens/s prompt processing, 6.9 tokens/s output;
+    - s01 was diagnosed correctly, but the investigation took 608 s, about 16× slower than Gemini;
+    - `low` cuts the hidden reasoning tokens, which dominate the time on such hardware.
+
+    It is a working offline alternative, not the evaluated configuration: 36 runs would take more than 10 hours of investigation alone.
+
+64. **The documentation's examples come from the final system.** The JSON in `docs/messages.md` is read from the state store of the final evaluation; the README trace and the walkthrough in `docs/architecture.md` are one real s01 run of the final code. Examples from earlier phases were replaced, so nothing in the docs shows behavior the system no longer has.
+
+## 10. Known limitations
+
+- **The Verifier rejects too often.** In the final evaluation it rejected 6 correct hypotheses and caught no wrong first diagnosis (details in `docs/results.md`).
+  - The final-decision rule recovered 5 of the 6; the sixth (s07 run 2) became the only wrong run.
+  - Its typical mistake is reading a client-side symptom as proof that the dependency is up: a full NATS client buffer (s07), or a cache counter that still grows (s03).
+  - Its checks are LLM-written PromQL and can be wrong themselves. In s03 run 3 it divided a cumulative counter by its value 4 minutes earlier, which stays near 1 whatever happens.
+  - A possible fix: give the Verifier tested query templates per fault type, like the Metrics Analyst's combined queries. Its checks would then be less independent.
+- **One model was evaluated.** All numbers are for `gemini-3.1-flash-lite` on its free tier. Prompts were tuned on the same model, over three passes with all 12 scenarios in view, so the 97% is an optimistic estimate for unseen faults. `gpt-oss:20b` was tried on one scenario only.
+- **Back-to-back incidents.** The evaluation waits 150 s between runs, so the previous fault leaves the 5-minute look-back window. The agents are told to ignore patterns that ended more than 60 s before the alert, but two overlapping incidents (the s13 stretch scenario) are not tested.
 - Loki's `label/values` endpoint can lag a minute behind fresh streams. The Log Analyst uses `error_pattern_summary` / `loki_query` first, and those are not affected.
-- One evaluation run takes ~7 min: ~4.5 min of scenario (reset, noise deploys, 120 s warm-up, 90 s observation) plus the investigation (paced by the provider's rate limit). 12 × 3 runs take ~4 h, not the spec's 90 min. Shortening the warm-up would leave the z-score baseline empty, and shortening the observation would leave slow faults (leaks) undeveloped. We chose correct scenarios over a fast evaluation.
+- **The evaluation is slow.** One run takes ~8 min: ~7 min of scenario (150 s cooldown, reset, noise deploys, 120 s warm-up, 90 s observation) plus the investigation. The 36 runs take ~5 h, not the spec's 90 min. Shortening the warm-up would leave the z-score baseline empty, and shortening the observation would leave slow faults (leaks) undeveloped. We chose correct scenarios over a fast evaluation.
+- **The free tier makes the evaluation depend on the provider.** Quota, network blocks and overload interrupted it several times (decision 61). Eight runs were not scored for that reason:
+  - 5 got no LLM answer at all (network block);
+  - 3 hit an overloaded Gemini. The overload rule was added after these 3 had finished (2 wrong, 1 correct); to stay neutral, the correct one was excluded too.

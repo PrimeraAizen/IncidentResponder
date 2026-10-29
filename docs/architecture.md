@@ -72,11 +72,14 @@ flowchart LR
 - **Parallel specialists.** The three specialists are reached from the same node, so LangGraph runs them in parallel. `add_edge([log, metrics, change], diagnostician)` makes the Diagnostician wait for all three.
 - **Routing.** Both conditional edges are small Python functions (`after_diagnostician`, `after_verifier`) that read the state.
 - **Loop protection.** The key of a hypothesis is `root_cause_service/fault_type`. If the Diagnostician re-proposes a key the Verifier already rejected, the loop ends.
-- **Final decision.** The final root cause, confidence and status are set by a pure function (`reporter.final_decision`):
-  - the confidence goes up if the hypothesis was confirmed, down if it was inconclusive, rejected or never verified;
-  - each failed specialist lowers it further and makes the report `partial`.
+- **Final decision.** The final root cause, confidence and status are set by a pure, unit-tested function (`reporter.final_decision`):
+  1. the Diagnostician's latest top hypothesis is the result, unless the Verifier rejected it;
+  2. if it was rejected, the result is the most recent hypothesis the Verifier did not reject;
+  3. if the Verifier rejected every hypothesis it tested, its checks did not settle the question: the result is the hypothesis the Diagnostician was most confident in, marked `partial`.
+
+  Confidence: +0.1 if confirmed, × 0.8 if inconclusive or never verified, × 0.5 if rejected, × 0.8 per failed specialist. A time or step limit makes the report `partial` and says why. Rule 3 rescued 5 runs of the final evaluation (see [results.md](results.md)).
 - **State.** `GraphState` is a typed dict:
-  - `plan`, `bundles`, `hypotheses` (the latest), `verdicts`, `rejected`, `verify_loops`, `report`, `failures`;
+  - `plan`, `bundles`, `failures`, `hypotheses` (the latest), `verdicts`, `tested` (`tested[i]` is the hypothesis `verdicts[i]` judged), `rejected`, `verify_loops`, `diagnostician_failed`, `report`;
   - every node also saves its output to `data/incidents.db` (`state_store.py`);
   - LangGraph's `SqliteSaver` checkpoints the graph state to `data/checkpoints.db` after every step.
 
@@ -175,18 +178,26 @@ The agents must find the root cause the way an on-call engineer would. They may 
 
 ## 4. One investigation, step by step
 
-A real run on s01 (17 Oct 2026, `gemini-3.1-flash-lite`, 27 calls, 95 s). The alert only says: *gateway HighLatency, p95 of POST /api/orders > 1 s*.
+A real run of the final system on s01 (29 Oct 2026, `gemini-3.1-flash-lite`, 28 calls, about 2 min). Its console output is in the [README](../README.md#demo-3-commands). The alert only says: *gateway HighLatency, p95 of POST /api/orders > 1 s*.
 
 1. **Harness.** `make scenario S=s01`:
    - reset, then two harmless deploys (inventory cache TTL, notification text);
    - 2 min of normal traffic, then +2 s latency on gateway→payment;
    - 90 s later, `alerts/s01.json` is written.
-2. **Orchestrator** (1 LLM call). It plans a 10-minute window and focuses on gateway and everything it calls, with one objective per specialist.
+2. **Orchestrator** (1 LLM call). It plans a window from 5 min before the alert to now, focuses on gateway and everything it depends on, and writes one objective per specialist.
 3. **The three specialists run in parallel:**
-   - *Log Analyst:* `error_pattern_summary` finds 427 `WARN slow upstream response upstream=payment` lines, ≈ 2 s each.
-   - *Metrics Analyst:* `zscore_anomaly` shows gateway→payment p95 at 2.89 s vs 0.09 s baseline (z = 100), while the 5xx ratio is unchanged.
-   - *Change Investigator:* `deploy_events`, `docker_inspect` and `git_diff` find the two deploys 151–152 s before the alert. It rates the cache-TTL change 0.6 and the text change 0.1; all containers are running with no restarts.
-4. **Diagnostician** (`dependency_graph` + 1 answer): **payment / latency**, confidence 0.9. It cites the logs and metrics evidence and ignores both deploys.
-5. **Verifier** (2 fresh queries): gateway→payment p95 is still 2.95 s and the other dependencies are normal; gateway logs show ~2 s payment calls. Verdict: **confirmed**.
+   - *Log Analyst:* `error_pattern_summary` finds 403 `WARN slow upstream response` lines from gateway with `upstream=payment`, ≈ 2 s each, then reads payment's own warnings with `loki_query`.
+   - *Metrics Analyst:* its four combined `zscore_anomaly` queries cover latency, calls between services, errors and resources. Results:
+     - gateway→payment p95 at 2.92 s vs 0.10 s baseline (z = 100);
+     - `/api/orders` p95 at 2.92 s vs 0.24 s;
+     - more goroutines in gateway and payment (waiting requests);
+     - an unchanged 0% error ratio.
+   - *Change Investigator:* `deploy_events`, `docker_inspect` and `git_diff` find the two deploys 151–153 s before the alert. It rates the inventory cache-TTL change 0.6 and the notification text change 0.1; no container restarted.
+4. **Diagnostician** (`dependency_graph` + 1 answer): **payment / latency**, confidence 0.9. It cites the log and metric evidence and ignores both deploys.
+5. **Verifier** (2 fresh queries against the baseline, with an `offset` computed by code):
+   - gateway→payment latency is 30× its value before the incident;
+   - payment's goroutines are up 50%.
+
+   Verdict: **confirmed**.
 6. **Reporter.** `final_decision` raises the confidence to 1.0 (confirmed) with status `complete`. The LLM writes the summary, timeline and 4 recommended actions, and `write_report` saves `reports/<incident_id>.md/.json`.
-7. Every one of the 27 LLM and tool calls is in `logs/run_<id>.jsonl`; every node's output is in `data/incidents.db`.
+7. Every one of the 28 LLM and tool calls is in `logs/run_<id>.jsonl`, with tool arguments. The largest share is 21%. Every node's output is in `data/incidents.db`.

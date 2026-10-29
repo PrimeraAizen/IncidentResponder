@@ -508,7 +508,7 @@ Dates assume today = 6 Oct 2026. Update checkboxes as you go.
 
 ### Phase 5 — Assignment 4 submission (2–8 Nov)
 - [x] Final full eval run; commit `logs/sample/` + results — 35/36 runs, 12/12 scenarios (`docs/results.md`)
-- [ ] README final, docs updated with real JSON examples
+- [x] README final, docs updated with real JSON examples (all from the final system: the evaluation's state store and a 29 Oct demo run)
 - [ ] Fresh-clone test: `git clone` → `make target-init && make up && make eval` works on a clean machine
 - [ ] Buffer for bugs
 - [ ] STRETCH: single-agent baseline comparison
